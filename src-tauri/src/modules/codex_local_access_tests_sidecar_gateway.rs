@@ -1992,6 +1992,39 @@ wire_api = "responses"
     }
 
     #[test]
+    fn provider_takeover_cleanup_preserves_local_access_provider_for_history_sessions() {
+        let profile_dir = std::env::temp_dir().join(format!(
+            "cockpit-provider-preserve-history-provider-test-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&profile_dir).expect("create temp profile");
+
+        let config_path = profile_dir.join(CODEX_PROFILE_CONFIG_FILE);
+        let config_content = r#"model_provider = "codex_local_access"
+model = "gpt-5.6-sol"
+model_context_window = 1000000
+
+[model_providers.codex_local_access]
+name = "Codex Local Access"
+base_url = "http://127.0.0.1:51525/v1"
+wire_api = "responses"
+requires_openai_auth = true
+http_headers = { "x-cockpit-instance-id" = "default" }
+"#;
+        fs::write(&config_path, config_content).expect("write initial config");
+
+        let cleaned = remove_codex_local_access_config(config_content).expect("cleanup config");
+        assert!(!cleaned.contains("model_provider = \"codex_local_access\""));
+        assert!(cleaned.contains("model_context_window = 1000000"));
+        assert!(cleaned.contains("[model_providers.codex_local_access]"));
+        assert!(cleaned.contains("base_url = \"http://127.0.0.1:51525/v1\""));
+        assert!(cleaned.contains("wire_api = \"responses\""));
+        assert!(!cleaned.contains("x-cockpit-instance-id"));
+
+        let _ = fs::remove_dir_all(&profile_dir);
+    }
+
+    #[test]
     fn normalizes_account_model_rules_for_collection_accounts() {
         let rules = normalize_account_model_rules(
             vec![
