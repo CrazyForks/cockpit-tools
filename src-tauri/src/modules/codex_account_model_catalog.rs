@@ -958,6 +958,43 @@ fn write_quick_config_to_config_toml_with_default(
     experimental_model_catalog_models: Option<Vec<CodexExperimentalModelDefinition>>,
     experimental_model_catalog_default_model_id: Option<String>,
 ) -> Result<CodexQuickConfig, String> {
+    write_quick_config_to_config_toml_with_default_mode(
+        base_dir,
+        model_context_window,
+        auto_compact_token_limit,
+        experimental_model_catalog_enabled,
+        experimental_model_catalog_models,
+        experimental_model_catalog_default_model_id,
+        false,
+    )
+}
+
+fn write_model_catalog_to_config_toml_preserving_context(
+    base_dir: &Path,
+    experimental_model_catalog_enabled: bool,
+    experimental_model_catalog_models: Vec<CodexExperimentalModelDefinition>,
+    experimental_model_catalog_default_model_id: Option<String>,
+) -> Result<CodexQuickConfig, String> {
+    write_quick_config_to_config_toml_with_default_mode(
+        base_dir,
+        None,
+        None,
+        Some(experimental_model_catalog_enabled),
+        Some(experimental_model_catalog_models),
+        experimental_model_catalog_default_model_id,
+        true,
+    )
+}
+
+fn write_quick_config_to_config_toml_with_default_mode(
+    base_dir: &Path,
+    model_context_window: Option<i64>,
+    auto_compact_token_limit: Option<i64>,
+    experimental_model_catalog_enabled: Option<bool>,
+    experimental_model_catalog_models: Option<Vec<CodexExperimentalModelDefinition>>,
+    experimental_model_catalog_default_model_id: Option<String>,
+    preserve_context: bool,
+) -> Result<CodexQuickConfig, String> {
     let config_path = get_config_toml_path(base_dir);
     let existing = fs::read_to_string(&config_path).unwrap_or_default();
 
@@ -978,22 +1015,24 @@ fn write_quick_config_to_config_toml_with_default(
     };
     let migrated_legacy_catalog = migrate_legacy_managed_catalog_reference(base_dir, &mut doc)?;
 
-    if let Some(context_window) = model_context_window {
-        if context_window <= 0 {
-            return Err("上下文窗口必须大于 0".to_string());
+    if !preserve_context {
+        if let Some(context_window) = model_context_window {
+            if context_window <= 0 {
+                return Err("上下文窗口必须大于 0".to_string());
+            }
+            doc[CODEX_CONFIG_MODEL_CONTEXT_WINDOW_KEY] = value(context_window);
+        } else {
+            let _ = doc.remove(CODEX_CONFIG_MODEL_CONTEXT_WINDOW_KEY);
         }
-        doc[CODEX_CONFIG_MODEL_CONTEXT_WINDOW_KEY] = value(context_window);
-    } else {
-        let _ = doc.remove(CODEX_CONFIG_MODEL_CONTEXT_WINDOW_KEY);
-    }
 
-    if let Some(compact_limit) = auto_compact_token_limit {
-        if compact_limit <= 0 {
-            return Err("自动压缩阈值必须大于 0".to_string());
+        if let Some(compact_limit) = auto_compact_token_limit {
+            if compact_limit <= 0 {
+                return Err("自动压缩阈值必须大于 0".to_string());
+            }
+            doc[CODEX_CONFIG_MODEL_AUTO_COMPACT_TOKEN_LIMIT_KEY] = value(compact_limit);
+        } else {
+            let _ = doc.remove(CODEX_CONFIG_MODEL_AUTO_COMPACT_TOKEN_LIMIT_KEY);
         }
-        doc[CODEX_CONFIG_MODEL_AUTO_COMPACT_TOKEN_LIMIT_KEY] = value(compact_limit);
-    } else {
-        let _ = doc.remove(CODEX_CONFIG_MODEL_AUTO_COMPACT_TOKEN_LIMIT_KEY);
     }
 
     if let Some(models) = experimental_model_catalog_models {
@@ -1093,6 +1132,33 @@ pub fn save_quick_config_for_base_dir_with_default(
         base_dir,
         model_context_window,
         auto_compact_token_limit,
+        experimental_model_catalog_enabled,
+        experimental_model_catalog_models,
+        experimental_model_catalog_default_model_id,
+    )
+}
+
+pub fn save_current_model_catalog_preserving_context(
+    experimental_model_catalog_enabled: bool,
+    experimental_model_catalog_models: Vec<CodexExperimentalModelDefinition>,
+    experimental_model_catalog_default_model_id: Option<String>,
+) -> Result<CodexQuickConfig, String> {
+    save_model_catalog_for_base_dir_preserving_context(
+        &get_codex_home(),
+        experimental_model_catalog_enabled,
+        experimental_model_catalog_models,
+        experimental_model_catalog_default_model_id,
+    )
+}
+
+pub fn save_model_catalog_for_base_dir_preserving_context(
+    base_dir: &Path,
+    experimental_model_catalog_enabled: bool,
+    experimental_model_catalog_models: Vec<CodexExperimentalModelDefinition>,
+    experimental_model_catalog_default_model_id: Option<String>,
+) -> Result<CodexQuickConfig, String> {
+    write_model_catalog_to_config_toml_preserving_context(
+        base_dir,
         experimental_model_catalog_enabled,
         experimental_model_catalog_models,
         experimental_model_catalog_default_model_id,

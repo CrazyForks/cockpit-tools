@@ -781,6 +781,27 @@ pub async fn save_codex_quick_config(
 }
 
 #[tauri::command]
+pub async fn save_codex_model_catalog(
+    experimental_model_catalog_enabled: bool,
+    experimental_model_catalog_models: Vec<crate::models::codex::CodexExperimentalModelDefinition>,
+    experimental_model_catalog_default_model_id: Option<String>,
+) -> Result<CodexQuickConfig, String> {
+    let saved = tauri::async_runtime::spawn_blocking(move || {
+        let saved = codex_account::save_current_model_catalog_preserving_context(
+            experimental_model_catalog_enabled,
+            experimental_model_catalog_models,
+            experimental_model_catalog_default_model_id,
+        )?;
+        crate::modules::codex_local_access::refresh_api_service_experimental_model_ids();
+        Ok::<CodexQuickConfig, String>(saved)
+    })
+    .await
+    .map_err(|error| format!("保存 Codex 可见模型后台任务失败: {}", error))??;
+    crate::modules::codex_local_access::trigger_gateway_reload_in_background("实验模型目录已更新");
+    Ok(saved)
+}
+
+#[tauri::command]
 pub fn get_codex_app_speed_config() -> Result<CodexAppSpeedConfig, String> {
     codex_speed::get_app_speed_config()
 }

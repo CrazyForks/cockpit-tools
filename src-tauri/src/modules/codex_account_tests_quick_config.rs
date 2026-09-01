@@ -73,6 +73,40 @@
     }
 
     #[test]
+    fn quick_config_catalog_only_context_preservation_keeps_latest_values() {
+        let base_dir = make_temp_dir("codex-catalog-context-preservation-test");
+        let config_path = base_dir.join("config.toml");
+        fs::write(
+            &config_path,
+            "model_context_window = 750000\nmodel_auto_compact_token_limit = 640000\nmodel = \"gpt-5\"\n",
+        )
+        .expect("write config");
+        let models = vec![CodexExperimentalModelDefinition {
+            model_id: "gpt-5".to_string(),
+            display_name: "GPT-5".to_string(),
+            reasoning_efforts: None,
+            context_window: None,
+            auto_compact_token_limit: None,
+        }];
+
+        let result = super::save_model_catalog_for_base_dir_preserving_context(
+            &base_dir,
+            true,
+            models,
+            None,
+        )
+        .expect("save model catalog");
+
+        let content = fs::read_to_string(&config_path).expect("read config");
+        assert!(content.contains("model_context_window = 750000"));
+        assert!(content.contains("model_auto_compact_token_limit = 640000"));
+        assert_eq!(result.detected_model_context_window, Some(750_000));
+        assert_eq!(result.detected_auto_compact_token_limit, Some(640_000));
+
+        fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
+    }
+
+    #[test]
     fn quick_config_can_write_custom_context_window_and_compact_limit() {
         let base_dir = make_temp_dir("codex-quick-config-custom-write-test");
         let config_path = base_dir.join("config.toml");
