@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - **Fixed existing Codex context settings being removed when saving visible models, model routing, or a copied instance**: catalog-only and routing saves now preserve existing `model_context_window` and `model_auto_compact_token_limit` values in `config.toml`; profiles that did not configure them remain on the default behavior, and failed transactions restore the previous values.
+- **Fixed Provider Gateway cleanup affecting model catalogs and default models it did not own**: cleanup now runs only when Provider ownership state or an explicit legacy Provider catalog is present; enabled experimental catalogs are reapplied after routing is disabled, normal exit cleanup, startup rollback, or watchdog fallback. Enabling an experimental default also records the original `model` state first so disabling restores the prior value or the original unset state.
 
 ### Upgrade Notes
 

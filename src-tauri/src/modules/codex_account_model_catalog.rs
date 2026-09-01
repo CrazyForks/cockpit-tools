@@ -167,22 +167,39 @@ fn resolve_catalog_reference(value: &str, base_dir: &Path) -> PathBuf {
     }
 }
 
-fn read_previous_experimental_catalog_reference(base_dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(experimental_model_previous_catalog_path(base_dir)).ok()?;
-    serde_json::from_str::<serde_json::Value>(&content)
-        .ok()?
-        .get("model_catalog_json")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
+#[derive(Debug, Default)]
+struct PreviousExperimentalCatalogState {
+    had_catalog_reference: bool,
+    catalog_reference: Option<String>,
+    had_model: bool,
+    model: Option<String>,
 }
 
-fn read_previous_experimental_model(base_dir: &Path) -> Option<String> {
+fn read_previous_experimental_catalog_state(
+    base_dir: &Path,
+) -> Option<PreviousExperimentalCatalogState> {
     let content = fs::read_to_string(experimental_model_previous_catalog_path(base_dir)).ok()?;
-    serde_json::from_str::<serde_json::Value>(&content)
-        .ok()?
+    let parsed = serde_json::from_str::<serde_json::Value>(&content).ok()?;
+    let catalog_reference = parsed
+        .get("model_catalog_json")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let model = parsed
         .get("model")
         .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
+        .map(str::to_string);
+    Some(PreviousExperimentalCatalogState {
+        had_catalog_reference: parsed
+            .get("had_model_catalog_json")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(catalog_reference.is_some()),
+        catalog_reference,
+        had_model: parsed
+            .get("had_model")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(model.is_some()),
+        model,
+    })
 }
 
 fn persist_previous_experimental_catalog_reference(
@@ -193,18 +210,11 @@ fn persist_previous_experimental_catalog_reference(
     let path = experimental_model_previous_catalog_path(base_dir);
     let reference = reference.map(str::trim).filter(|value| !value.is_empty());
     let model = model.map(str::trim).filter(|value| !value.is_empty());
-    if reference.is_none() && model.is_none() {
-        return match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(format!(
-                "清理原模型目录记录失败: path={}, error={}",
-                path.display(),
-                error
-            )),
-        };
-    };
-    let mut content = serde_json::json!({});
+    let mut content = serde_json::json!({
+        "version": 2,
+        "had_model_catalog_json": reference.is_some(),
+        "had_model": model.is_some(),
+    });
     if let Some(reference) = reference {
         content["model_catalog_json"] = serde_json::Value::String(reference.to_string());
     }
@@ -216,6 +226,19 @@ fn persist_previous_experimental_catalog_reference(
     content.push('\n');
     write_string_atomic(&path, &content)
         .map_err(|_| "EXPERIMENTAL_MODEL_CATALOG_PREVIOUS_WRITE_FAILED".to_string())
+}
+
+fn clear_previous_experimental_catalog_reference(base_dir: &Path) -> Result<(), String> {
+    let path = experimental_model_previous_catalog_path(base_dir);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "清理原模型目录记录失败: path={}, error={}",
+            path.display(),
+            error
+        )),
+    }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -776,17 +799,27 @@ fn apply_experimental_model_catalog_to_doc(
 
     if !enabled {
         if currently_enabled || policy_enabled {
+            let previous_state = read_previous_experimental_catalog_state(base_dir);
             if managed_catalog_configured {
-                if let Some(previous_catalog) =
-                    read_previous_experimental_catalog_reference(base_dir)
-                {
-                    doc[CODEX_CONFIG_MODEL_CATALOG_JSON_KEY] = value(previous_catalog);
-                } else {
-                    let _ = doc.remove(CODEX_CONFIG_MODEL_CATALOG_JSON_KEY);
+                match previous_state.as_ref() {
+                    Some(state) if state.had_catalog_reference => {
+                        if let Some(previous_catalog) = state.catalog_reference.as_deref() {
+                            doc[CODEX_CONFIG_MODEL_CATALOG_JSON_KEY] = value(previous_catalog);
+                        }
+                    }
+                    _ => {
+                        let _ = doc.remove(CODEX_CONFIG_MODEL_CATALOG_JSON_KEY);
+                    }
                 }
             }
-            if let Some(previous_model) = read_previous_experimental_model(base_dir) {
-                doc["model"] = value(previous_model);
+            if let Some(state) = previous_state {
+                if state.had_model {
+                    if let Some(previous_model) = state.model.as_deref() {
+                        doc["model"] = value(previous_model);
+                    }
+                } else {
+                    let _ = doc.remove("model");
+                }
             }
         }
         return Ok(currently_enabled || policy_enabled);
@@ -815,6 +848,14 @@ fn apply_experimental_model_catalog_to_doc(
     }
     let generated_content = build_experimental_model_catalog(base_dir)
         .map_err(|_| "EXPERIMENTAL_MODEL_CATALOG_SERIALIZE_FAILED".to_string())?;
+    if read_previous_experimental_catalog_state(base_dir).is_none() {
+        let previous_model = doc.get("model").and_then(|item| item.as_str());
+        persist_previous_experimental_catalog_reference(
+            base_dir,
+            user_catalog_reference,
+            previous_model,
+        )?;
+    }
     if let Some(default_model_id) = read_experimental_model_default_model_id(base_dir) {
         if experimental_models
             .iter()
@@ -822,16 +863,6 @@ fn apply_experimental_model_catalog_to_doc(
         {
             doc["model"] = value(default_model_id);
         }
-    }
-    if read_previous_experimental_catalog_reference(base_dir).is_none()
-        && read_previous_experimental_model(base_dir).is_none()
-    {
-        let previous_model = doc.get("model").and_then(|item| item.as_str());
-        persist_previous_experimental_catalog_reference(
-            base_dir,
-            user_catalog_reference,
-            previous_model,
-        )?;
     }
     let content = if has_saved_model_definitions && !migrate_saved_model_definitions {
         generated_content
@@ -1081,7 +1112,7 @@ fn write_quick_config_to_config_toml_with_default_mode(
     }
     if experimental_model_catalog_enabled == Some(false) {
         cleanup_legacy_managed_model_catalogs(base_dir);
-        persist_previous_experimental_catalog_reference(base_dir, None, None)?;
+        clear_previous_experimental_catalog_reference(base_dir)?;
     }
 
     read_quick_config_from_config_toml(base_dir)
@@ -1424,7 +1455,7 @@ fn cleanup_experimental_model_catalog_for_dir(base_dir: &Path) -> Result<(), Str
     }
     cleanup_legacy_managed_model_catalogs(base_dir);
     let _ = crate::modules::codex_local_access::invalidate_codex_model_cache(base_dir);
-    persist_previous_experimental_catalog_reference(base_dir, None, None)?;
+    clear_previous_experimental_catalog_reference(base_dir)?;
     Ok(())
 }
 

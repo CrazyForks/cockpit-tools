@@ -454,6 +454,70 @@
     }
 
     #[test]
+    fn quick_config_restores_model_selected_before_experimental_default() {
+        let base_dir = make_temp_dir("codex-experimental-restore-selected-model-test");
+        fs::write(base_dir.join("config.toml"), "model = \"gpt-original\"\n")
+            .expect("write config");
+        let models = vec![CodexExperimentalModelDefinition {
+            model_id: "custom-model".to_string(),
+            display_name: "Custom Model".to_string(),
+            reasoning_efforts: None,
+            context_window: None,
+            auto_compact_token_limit: None,
+        }];
+
+        write_quick_config_to_config_toml_with_default(
+            &base_dir,
+            None,
+            None,
+            Some(true),
+            Some(models),
+            Some("custom-model".to_string()),
+        )
+        .expect("enable experimental catalog");
+        write_quick_config_to_config_toml(&base_dir, None, None, Some(false), None)
+            .expect("disable experimental catalog");
+
+        let config = fs::read_to_string(base_dir.join("config.toml")).expect("read config");
+        assert!(config.contains("model = \"gpt-original\""));
+        assert!(!config.contains("model = \"custom-model\""));
+
+        fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn quick_config_removes_experimental_default_when_model_was_unset() {
+        let base_dir = make_temp_dir("codex-experimental-restore-unset-model-test");
+        fs::write(base_dir.join("config.toml"), "approval_policy = \"on-request\"\n")
+            .expect("write config");
+        let models = vec![CodexExperimentalModelDefinition {
+            model_id: "custom-model".to_string(),
+            display_name: "Custom Model".to_string(),
+            reasoning_efforts: None,
+            context_window: None,
+            auto_compact_token_limit: None,
+        }];
+
+        write_quick_config_to_config_toml_with_default(
+            &base_dir,
+            None,
+            None,
+            Some(true),
+            Some(models),
+            Some("custom-model".to_string()),
+        )
+        .expect("enable experimental catalog");
+        write_quick_config_to_config_toml(&base_dir, None, None, Some(false), None)
+            .expect("disable experimental catalog");
+
+        let config = fs::read_to_string(base_dir.join("config.toml")).expect("read config");
+        assert!(config.contains("approval_policy = \"on-request\""));
+        assert!(!config.contains("model = "));
+
+        fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
+    }
+
+    #[test]
     fn quick_config_can_enable_experimental_catalog_from_local_access_catalog() {
         let base_dir = make_temp_dir("codex-experimental-local-access-catalog-test");
         fs::write(
