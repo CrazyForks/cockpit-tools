@@ -830,6 +830,7 @@ pub fn run() {
             commands::codex::get_codex_quick_config,
             commands::codex::save_codex_quick_config,
             commands::codex::save_codex_model_catalog,
+            commands::codex::restore_codex_active_takeover_if_enabled,
             commands::codex::get_codex_app_speed_config,
             commands::codex::save_codex_app_speed,
             commands::codex::get_codex_api_service_app_speed_config,

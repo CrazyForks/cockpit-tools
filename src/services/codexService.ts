@@ -718,3 +718,12 @@ export async function fetchCodexAccountNoteMailUrl(
 ): Promise<CodexMailPreviewFetchResult> {
   return await invoke('fetch_codex_account_note_mail_url', { mailUrl });
 }
+
+export async function restoreCodexActiveTakeoverIfEnabled(): Promise<boolean> {
+  try {
+    return await invoke<boolean>('restore_codex_active_takeover_if_enabled');
+  } catch (e) {
+    console.warn('[Codex Auto-Restore] 恢复代理接管失败:', e);
+    return false;
+  }
+}

@@ -980,3 +980,32 @@ wire_api = "responses"
         assert_eq!(groups[1].policy(), CodexGroupQuotaRefreshPolicy::Minutes(5));
         assert_eq!(groups[2].policy(), CodexGroupQuotaRefreshPolicy::Disabled);
     }
+
+    #[test]
+    fn auto_restore_on_launch_reapplies_catalog_and_preserves_1m_context_window() {
+        let base_dir = make_temp_dir("codex-auto-restore-launch-test");
+        let initial_config = "model = \"gpt-5.6-sol\"\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = 900000\n";
+        fs::write(base_dir.join("config.toml"), initial_config).expect("write initial config");
+        write_quick_config_to_config_toml(&base_dir, None, None, Some(true), None)
+            .expect("enable experimental catalog");
+
+        // 模拟退出接管后
+        fs::write(
+            base_dir.join("config.toml"),
+            "model = \"gpt-5.6-sol\"\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = 900000\n",
+        )
+        .expect("write unattached config");
+
+        // 模拟启动自动恢复
+        assert!(
+            super::reapply_experimental_model_policy_if_enabled(&base_dir)
+                .expect("reapply experimental policy")
+        );
+
+        let restored_config = fs::read_to_string(base_dir.join("config.toml")).expect("read restored config");
+        assert!(restored_config.contains("model_context_window = 1000000"));
+        assert!(restored_config.contains("model_auto_compact_token_limit = 900000"));
+        assert!(restored_config.contains("model_catalog_json = \"cockpit-model-catalog.json\""));
+
+        fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
+    }

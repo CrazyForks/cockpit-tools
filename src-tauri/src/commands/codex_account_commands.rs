@@ -2437,4 +2437,21 @@ pub async fn codex_wakeup_run_enabled_tasks(
     codex_wakeup_scheduler::run_enabled_tasks_now(Some(&app), &trigger).await
 }
 
+/// 启动时根据配置自动恢复可见模型目录与代理接管状态
+#[tauri::command]
+pub async fn restore_codex_active_takeover_if_enabled(app: AppHandle) -> Result<bool, String> {
+    let cfg = config::get_user_config();
+    if !cfg.codex_auto_restore_takeover_on_launch {
+        return Ok(false);
+    }
+    let base_dir = codex_account::get_codex_home();
+    let reapply_catalog_result =
+        codex_account::reapply_experimental_model_policy_if_enabled(&base_dir)?;
+    logger::log_info(&format!(
+        "[Codex Auto-Restore] restore_codex_active_takeover_if_enabled executed: reapply_catalog={}",
+        reapply_catalog_result
+    ));
+    Ok(reapply_catalog_result)
+}
+
 // ─── Codex 账号分组持久化 ────────────────────────────────────────────
