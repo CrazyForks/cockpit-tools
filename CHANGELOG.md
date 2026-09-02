@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ---
 ## [Unreleased]
 
+## [1.3.36] - 2026-09-02
+
+### Added
+
+- **Automatic Codex takeover restoration on startup**: when enabled, Cockpit Tools restores the last active Codex proxy takeover and visible-model configuration during launch, with a Settings switch to control the behavior.
+
 ### Fixed
 
 - **Fixed existing Codex context settings being removed when saving visible models, model routing, or a copied instance**: catalog-only and routing saves now preserve existing `model_context_window` and `model_auto_compact_token_limit` values in `config.toml`; profiles that did not configure them remain on the default behavior, and failed transactions restore the previous values.

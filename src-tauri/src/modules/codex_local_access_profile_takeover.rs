@@ -411,6 +411,10 @@ fn remove_codex_local_access_config(config_text: &str) -> Result<String, String>
             .get_mut(CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID)
             .and_then(|item| item.as_table_mut())
         {
+            // The bearer token is generated and managed by Cockpit's takeover;
+            // keep the provider definition for history replay, but never leave
+            // the temporary credential active after detaching the takeover.
+            let _ = provider.remove("experimental_bearer_token");
             let remove_headers = provider
                 .get_mut("http_headers")
                 .map(|headers| {
@@ -934,4 +938,3 @@ fn restore_takeover_profiles_after_disable(
 
     Ok(())
 }
-
