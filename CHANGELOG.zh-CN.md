@@ -7,7 +7,26 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
 ---
-## [未发布]
+## [1.3.40] - 2026-09-05
+
+### 新增
+
+- **常驻提供 Luna Reserve 手动选项**：API Service 与 Codex 受管模型列表提供 `gpt-reserve`，不因暂时没有合格账号而隐藏；不自动切换、不设为默认，也不预设固定压缩阈值。请求保持 `gpt-reserve` ID，仅在当前 API Key 的账号范围内选择常规额度不可用、备用额度允许且服务端标记为 `luna_reserve` 的 OAuth 账号；没有合格账号则报错，不改用普通账号或其他模型。用户显式配置的模型访问限制仍生效，关闭可见模型受管后仍由官方控制模型可见性。
+
+### 变更
+
+- **恢复 Codex OAuth 凭据过期后的单次重试**：Codex Alpha Search 收到上游 `401` 后会刷新当前 Home 凭据并重试一次，与常规 Codex 请求的恢复行为保持一致。
+- **账号池暂时无可用账号时自动恢复并重试一次**：当账号池存在候选账号但没有账号可被选中时，Cockpit Tools 会重置运行时调度状态并重试原请求；如果重试后仍没有可用账号，响应会明确说明已执行自动恢复。
+- **确认关闭第三方 API 路由后立即保存状态**：关闭路由时会立即保存“已关闭”，但不会影响当前正在运行的会话；配置会在下次启动 Codex 时生效。
+- **按 API Key 作用域隔离 Codex 会话绑定**：同一 Codex 会话在不同客户端 API Key 下不会复用另一 Key 的账号绑定，避免受限 Key 被错误路由到不属于自身范围的账号。
+
+- **按客户端版本返回 Codex 模型能力**：模型目录会依据 `client_version` 过滤不兼容的 `max`/`ultra` 推理强度，并保留官方模型别名、上下文窗口、优先级、服务层级和可用推理强度；Astra 使用已确认的官方模型能力模板。
+- **补齐 Codex API Service 的 HTTP、Responses 与 WebSocket 链路**：支持 Codex client model 路由、Responses/WebSocket 流式事件、连接保活与 Ping、上游事件和配额响应头合并、握手限额的 `Retry-After`，以及本地升级失败时的兼容回退。
+- **支持 Codex 多 Agent 与分支会话**：兼容 `collab_spawn` 委派标记、orphan delegation、fork/subagent 会话层级和父子会话身份，保证协作请求能沿正确会话继续执行。
+- **完善 Claude/OpenAI 协议转换**：修正工具调用与 `tool_result` 顺序、工具相邻关系、JSON Schema `required` 严格度、推理文本增量/摘要映射，并保留 Codex→Claude 的 cache-write 用量信息。
+- **增强 Codex 认证、调度与配额状态一致性**：改进 OAuth 刷新和 `401` 重试、并发刷新合并、模型级冷却与配额耗尽状态、重试后错误归因、别名/子 Agent 选择和候选账号回退，避免可恢复请求被错误冷却。
+- **补齐流式用量与诊断信息**：区分首个数据包与有效 TTFT，补充流式模式、WebSocket 响应观察、重试隔离的响应头和请求级诊断信息，使额度与请求失败原因更准确。
+- **保持非 Codex 模型目录独立**：本次 API Service 同步仅更新 Codex 模型条目及其必要的共享底层能力，不覆盖其他供应商的模型配置。
 
 ## [1.3.39] - 2026-09-05
 

@@ -7,7 +7,26 @@ All notable changes to Cockpit Tools will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
-## [Unreleased]
+## [1.3.40] - 2026-09-05
+
+### Added
+
+- **Persistent manual Luna Reserve option**: API Service and Codex managed catalogs expose `gpt-reserve` even when no account is currently eligible, without automatically selecting it, changing the default model, or fixing a compaction threshold. Requests retain the `gpt-reserve` ID and select only OAuth accounts within the current API key's scope whose regular allowance is unavailable, reserve allowance is allowed, and server banner is `luna_reserve`. If no account qualifies, the request fails without switching to ordinary accounts or other models. Explicit model access restrictions still apply, and disabling managed model visibility returns visibility control to the official client.
+
+### Changed
+
+- **Restore one retry after an expired Codex OAuth token**: Codex Alpha Search now refreshes the selected Home credential and retries once after an upstream `401`, matching the normal Codex request recovery behavior.
+- **Automatically recover temporarily unavailable local-access accounts once before retrying**: when an account pool has candidates but none can be selected, Cockpit Tools resets their runtime scheduler state and retries the original request; if the retry still finds no usable account, the response explains that automatic recovery was attempted.
+- **Persist disabling third-party API routing from the confirmation action**: turning routing off now saves the disabled state immediately while leaving the current running session untouched; the change takes effect on the next Codex launch.
+- **Isolate Codex session affinity by API key scope**: the same Codex session no longer reuses an account binding created under another client API key, preventing a restricted key from being routed to an account outside its scope.
+
+- **Return Codex model capabilities by client version**: the model catalog now filters incompatible `max`/`ultra` reasoning efforts by `client_version` while preserving official model aliases, context windows, priorities, service tiers, and supported reasoning levels; Astra uses the confirmed official capability template.
+- **Completed the Codex API Service HTTP, Responses, and WebSocket paths**: added the Codex client-model route, Responses/WebSocket streaming events, connection keepalive and Ping, upstream event and quota-header merging, handshake `Retry-After` handling for quota errors, and compatibility fallback when local upgrades fail.
+- **Supported Codex multi-agent and forked sessions**: added compatibility for the `collab_spawn` delegation marker, orphan delegation, fork/subagent session hierarchy, and parent/child session identity so collaborative requests continue on the correct session.
+- **Improved Claude/OpenAI protocol translation**: corrected tool-call and `tool_result` ordering, tool adjacency, JSON Schema `required` strictness, reasoning text delta/summary mapping, and preservation of Codex-to-Claude cache-write usage.
+- **Strengthened Codex authentication, scheduling, and quota-state consistency**: improved OAuth refresh and `401` retries, concurrent refresh merging, model-level cooldown and quota-exhausted state, post-retry error attribution, alias/subagent selection, and candidate-account fallback to avoid cooling accounts for recoverable requests.
+- **Completed streaming usage and diagnostics**: separated first-packet timing from effective TTFT and added stream-mode markers, WebSocket response observation, retry-scoped response headers, and request-level diagnostics for more accurate quota and failure reporting.
+- **Kept non-Codex model catalogs independent**: this API Service sync updates only Codex model entries and the shared low-level capabilities required by Codex, without overwriting other providers' model configuration.
 
 ## [1.3.39] - 2026-09-05
 

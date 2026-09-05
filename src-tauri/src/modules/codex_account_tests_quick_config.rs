@@ -1,6 +1,44 @@
 // Codex 账号测试：Quick config, provider validation and index repair behavior。
 // 测试与生产实现共享 super 作用域，验证真实持久化和运行态行为。
     #[test]
+    fn managed_catalog_lists_reserve_without_changing_defaults_and_cleans_up_when_disabled() {
+        let base_dir = make_temp_dir("codex-reserve-managed-catalog");
+        fs::write(base_dir.join("config.toml"), "model = \"gpt-5.6-sol\"\n")
+            .expect("write original model");
+        let definitions = super::default_experimental_model_definitions(&base_dir);
+        assert!(definitions.iter().any(|model| model.model_id == "gpt-reserve"));
+        let saved = super::save_model_catalog_for_base_dir_preserving_context(
+            &base_dir, true, definitions.clone(), Some("gpt-5.6-sol".to_string()),
+        ).expect("save managed catalog");
+        assert!(saved.experimental_model_catalog_models.iter()
+            .any(|model| model.model_id == "gpt-reserve"));
+        let catalog: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(base_dir.join(super::CODEX_MANAGED_MODEL_CATALOG_FILE)).unwrap()
+        ).unwrap();
+        let models = catalog["models"].as_array().unwrap();
+        let reserve = models.iter().find(|model| model["slug"] == "gpt-reserve").unwrap();
+        let luna = models.iter().find(|model| model["slug"] == "gpt-5.6-luna").unwrap();
+        assert_eq!(reserve["visibility"], "list");
+        assert_eq!(reserve["display_name"], "Luna Reserve");
+        assert_eq!(reserve["context_window"], luna["context_window"]);
+        assert_eq!(reserve["supported_reasoning_levels"], luna["supported_reasoning_levels"]);
+        assert!(reserve["auto_compact_token_limit"].is_null());
+        let config = fs::read_to_string(base_dir.join("config.toml")).unwrap();
+        assert!(config.contains("model = \"gpt-5.6-sol\""));
+        assert!(!config.contains("model_context_window"));
+        assert!(!config.contains("model_auto_compact_token_limit"));
+
+        super::save_model_catalog_for_base_dir_preserving_context(
+            &base_dir, false, definitions, None,
+        ).expect("disable managed catalog");
+        let config = fs::read_to_string(base_dir.join("config.toml")).unwrap();
+        assert!(!config.contains("model_catalog_json"));
+        assert!(!base_dir.join(super::CODEX_MANAGED_MODEL_CATALOG_FILE).exists());
+        assert!(config.contains("model = \"gpt-5.6-sol\""));
+        fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
+    }
+
+    #[test]
     fn quick_config_reads_custom_context_window_without_hiding_it() {
         let base_dir = make_temp_dir("codex-quick-config-custom-window-test");
         let config_path = base_dir.join("config.toml");
@@ -465,7 +503,15 @@
         )
         .expect("enable dynamic experimental catalog");
 
-        assert_eq!(result.experimental_model_catalog_models, models);
+        let mut expected = models.clone();
+        expected.push(CodexExperimentalModelDefinition {
+            model_id: "gpt-reserve".to_string(),
+            display_name: "Luna Reserve".to_string(),
+            reasoning_efforts: None,
+            context_window: None,
+            auto_compact_token_limit: None,
+        });
+        assert_eq!(result.experimental_model_catalog_models, expected);
         let config = fs::read_to_string(base_dir.join("config.toml")).expect("read config");
         assert!(!config.contains("model = \"custom-model-a\""));
         let catalog: serde_json::Value = serde_json::from_str(
@@ -589,7 +635,15 @@
         )
         .expect("persist visible model list");
 
-        assert_eq!(result.experimental_model_catalog_models, models);
+        let mut expected = models.clone();
+        expected.push(CodexExperimentalModelDefinition {
+            model_id: "gpt-reserve".to_string(),
+            display_name: "Luna Reserve".to_string(),
+            reasoning_efforts: None,
+            context_window: None,
+            auto_compact_token_limit: None,
+        });
+        assert_eq!(result.experimental_model_catalog_models, expected);
         assert_eq!(
             result
                 .experimental_model_catalog_default_model_id

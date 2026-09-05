@@ -590,7 +590,7 @@ pub(crate) fn read_experimental_model_definitions(
     let Ok(content) = fs::read_to_string(&path) else {
         return default_experimental_model_definitions(base_dir);
     };
-    match serde_json::from_str::<ExperimentalModelCatalogConfig>(&content)
+    let mut models = match serde_json::from_str::<ExperimentalModelCatalogConfig>(&content)
         .map_err(|error| error.to_string())
         .and_then(|config| {
             let requires_catalog_migration =
@@ -623,7 +623,17 @@ pub(crate) fn read_experimental_model_definitions(
             ));
             default_experimental_model_definitions(base_dir)
         }
+    };
+    if !models.iter().any(|model| model.model_id.eq_ignore_ascii_case("gpt-reserve")) {
+        models.push(CodexExperimentalModelDefinition {
+            model_id: "gpt-reserve".to_string(),
+            display_name: "Luna Reserve".to_string(),
+            reasoning_efforts: None,
+            context_window: None,
+            auto_compact_token_limit: None,
+        });
     }
+    models
 }
 
 fn persist_experimental_model_definitions(
@@ -726,6 +736,7 @@ fn build_experimental_model_catalog(base_dir: &Path) -> Result<String, String> {
     let mut catalog =
         crate::modules::codex_protocol::build_codex_client_models_response_with_model_definitions_and_reasoning(&definitions);
     apply_model_context_config_to_catalog(&mut catalog, &model_definitions);
+    crate::modules::codex_protocol::ensure_codex_reserve_fallback(&mut catalog);
     serde_json::to_string_pretty(&catalog)
         .map(|mut content| {
             content.push('\n');
