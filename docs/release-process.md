@@ -69,7 +69,7 @@ Tauri release build 使用仓库配置的 updater signing secrets：
 
 ## 4. Release assets 与 updater manifests
 
-每个平台先通过 `scripts/release/stage_release_assets.cjs` 规范化允许上传的 release assets，再用 `scripts/release/build_target_latest_json.cjs` 生成各 target 的 updater manifest。
+Windows、macOS Apple Silicon/Intel 和 Linux 构建 job 会先通过 `scripts/release/stage_release_assets.cjs` 规范化允许上传的 release assets，再用 `scripts/release/build_target_latest_json.cjs` 生成各 updater target 的 manifest。macOS Universal job 只规范化并上传 Universal DMG，不生成 updater manifest；该 DMG 供后续 Homebrew Cask 更新使用。
 
 所有平台完成后，`finalize-legacy-latest` job 会下载 release assets，并用：
 
