@@ -13,6 +13,10 @@
 
 ### 变更
 
+- **完善跨平台回归验证与发布质量门禁**：PR 验证现在统一运行 TypeScript、release script、Go sidecar 和核心 Rust 回归测试，并在 Windows、Ubuntu x86_64 / ARM64、macOS Intel / Apple Silicon / Universal 构建前执行对应检查。
+- **改进安全报告与代码安全扫描**：补充真实可执行的漏洞报告指引，明确敏感凭据脱敏要求，并将 Go sidecar 纳入 CodeQL 分析。
+- **同步发布文档与实际流程**：补充多平台安装包、Tauri updater signing、target manifests、legacy `latest.json`、`SHA256SUMS.txt` 和 Homebrew Cask 的当前说明。
+- **优化发布状态管理**：发布流程在所有平台产物和校验文件准备完成前保持 draft，避免失败时公开不完整的 latest 版本。
 - **统一 Codex API 供应商配置**：API Key 账号现以已保存的模型供应商为端点、密钥、模型目录、协议和 Responses WebSocket 配置的唯一来源；编辑 API Key 时会展示供应商的协议与 WebSocket 状态，供应商配置仍在模型供应商弹框中统一维护。“添加 Codex 账号”和“编辑 API Key”弹框宽度已与模型供应商弹框对齐。
 - **生产环境统一使用内置 Sidecar 作为 Codex API 网关**：移除已退役的进程内 legacy 网关及其生产环境中的拒绝字段重试逻辑，保留测试所需的共享传输辅助代码；API 服务请求统一使用单一的路由、账号选择、额度处理和上游错误响应链路。
 - **改进 Codex API 传输与故障切换**：Responses 流保留官方嵌套错误详情与序号，正确处理被拆分的 CRLF，并保留 WebSocket 预热后续请求和具名工具输出；容量不足与 `model_not_found` 可正确切换账号，永久拒绝的 OAuth 凭据停止重试，请求规范会话可用于填充自定义请求头，Codex 工具 Schema 会移除不支持的 Unicode 正则，并支持 `gpt-image-2.5` 变体。Cockpit 专属的 API Key 范围控制、实例网关、Responses Lite、Agent Identity 以及现有 `gpt-5.5`／`gpt-image-2.5` 生图默认值保持不变。
