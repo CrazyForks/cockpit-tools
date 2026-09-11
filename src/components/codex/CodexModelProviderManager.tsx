@@ -56,7 +56,7 @@ import {
   countCodexModelProviderReferences,
   createCodexModelProvider,
   deleteCodexModelProvider,
-  listCodexModelProviders,
+  mergeCodexModelProviderApiKeysFromAccounts,
   normalizeCodexModelProviderBaseUrl,
   removeApiKeyFromCodexModelProvider,
   renameApiKeyOnCodexModelProvider,
@@ -912,7 +912,7 @@ export function useCodexModelProviderManagerController({
     setLoading(true);
     setError(null);
     try {
-      const next = await listCodexModelProviders();
+      const next = await mergeCodexModelProviderApiKeysFromAccounts(accounts);
       setProviders(next);
       onProvidersChanged?.(next);
     } catch (err) {
@@ -925,7 +925,7 @@ export function useCodexModelProviderManagerController({
     } finally {
       setLoading(false);
     }
-  }, [onProvidersChanged, t]);
+  }, [accounts, onProvidersChanged, t]);
 
   const reloadCurrentAccount = useCallback(async () => {
     try {
