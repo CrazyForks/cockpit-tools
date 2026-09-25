@@ -395,3 +395,57 @@ fn legacy_sing_box_install_is_not_reused() {
     .unwrap();
     assert!(load_installed(&temp.0).unwrap().is_none());
 }
+
+/// Windows denies renaming the release directory while security software still holds the
+/// freshly executed binary open; the same rename succeeds a moment later.
+#[test]
+fn publish_rename_retries_transient_handle_races() {
+    let attempts = std::sync::atomic::AtomicUsize::new(0);
+    let published = retry_transient_publish(|| {
+        let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+        if attempt < 3 {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the staged binary is still held open",
+            ))
+        } else {
+            Ok("release-published")
+        }
+    })
+    .expect("a transient handle race must not fail the install");
+    assert_eq!(published, "release-published");
+    assert_eq!(attempts.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn publish_rename_does_not_retry_permanent_errors() {
+    let attempts = std::sync::atomic::AtomicUsize::new(0);
+    let error = retry_transient_publish::<()>(|| {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "staging directory disappeared",
+        ))
+    })
+    .expect_err("a permanent error must surface immediately");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn publish_rename_reports_the_last_error_after_the_budget_is_spent() {
+    let attempts = std::sync::atomic::AtomicUsize::new(0);
+    let error = retry_transient_publish::<()>(|| {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "still held open",
+        ))
+    })
+    .expect_err("an exhausted retry budget must report failure");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        PUBLISH_RENAME_ATTEMPTS as usize
+    );
+}

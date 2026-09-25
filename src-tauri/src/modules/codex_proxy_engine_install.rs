@@ -20,6 +20,12 @@ const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 // First launch may wait for macOS security assessment or antivirus scanning.
 // This runs only in the cancellable install job, never in page/status reads.
 const FIRST_LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
+// Publication is one atomic directory rename. Windows keeps a handle on the freshly
+// executed binary while security software scans it, which denies that rename for a
+// moment, so the same rename is retried briefly instead of failing the install.
+const PUBLISH_RENAME_ATTEMPTS: u32 = 12;
+const PUBLISH_RENAME_INITIAL_DELAY: Duration = Duration::from_millis(50);
+const PUBLISH_RENAME_MAX_DELAY: Duration = Duration::from_millis(500);
 const MANIFEST: &str = include_str!("../../../sidecars/mihomo/upstream-assets.json");
 const DOWNLOAD_BASE: &str = "https://github.com/MetaCubeX/mihomo/releases/download/";
 static JOB: LazyLock<Mutex<Option<Job>>> = LazyLock::new(|| Mutex::new(None));
@@ -441,6 +447,49 @@ impl Drop for Staging {
         }
     }
 }
+
+/// A handle that Windows security scanning still holds (`ERROR_ACCESS_DENIED` /
+/// `ERROR_SHARING_VIOLATION`) resolves on its own within a second or two.
+fn transient_publish_error(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        return matches!(error.raw_os_error(), Some(5) | Some(32));
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Retry only transient handle/permission races. Every other error fails fast so the
+/// caller keeps its staging directory and can still report the real cause.
+fn retry_transient_publish<T>(
+    mut operation: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let mut delay = PUBLISH_RENAME_INITIAL_DELAY;
+    let mut attempt = 1_u32;
+    loop {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                if attempt >= PUBLISH_RENAME_ATTEMPTS || !transient_publish_error(&error) {
+                    return Err(error);
+                }
+                super::logger::log_warn(&format!(
+                    "[ProxyEngine] 内核发布遇到临时占用，重试: attempt={attempt}/{PUBLISH_RENAME_ATTEMPTS}, kind={:?}, os_code={:?}",
+                    error.kind(),
+                    error.raw_os_error()
+                ));
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(PUBLISH_RENAME_MAX_DELAY);
+                attempt += 1;
+            }
+        }
+    }
+}
 fn private_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|_| "ENGINE_INSTALL_IO")?;
     if fs::symlink_metadata(path)
@@ -575,7 +624,16 @@ async fn install_at(
             atomic_write::write_secret_string_atomic(&output.join("installed.json"), &pointer)
                 .map_err(|_| "ENGINE_INSTALL_IO")?;
             File::create(output.join(".lease")).map_err(|_| "ENGINE_INSTALL_IO")?;
-            fs::rename(output, &stage.release).map_err(|_| "ENGINE_INSTALL_IO")?;
+            // The staged binary was just executed for the version check, so Windows may
+            // still hold it open and deny this rename for a moment.
+            retry_transient_publish(|| fs::rename(&output, &stage.release)).map_err(|error| {
+                super::logger::log_warn(&format!(
+                    "[ProxyEngine] 内核发布重命名失败: kind={:?}, os_code={:?}",
+                    error.kind(),
+                    error.raw_os_error()
+                ));
+                "ENGINE_INSTALL_IO".to_string()
+            })?;
             atomic_write::write_secret_string_atomic(&stage.root.join("active.json"), &pointer)
                 .map_err(|_| "ENGINE_INSTALL_IO")?;
             stage.committed = true;
