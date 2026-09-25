@@ -29,6 +29,7 @@ fn fixture() -> Source {
         default_invalidated: false,
         strategy_members: None,
         usage: None,
+        parser_version: PARSER_VERSION,
     }
 }
 
@@ -99,6 +100,7 @@ fn subscription_fixture() -> Source {
         default_invalidated: false,
         strategy_members: None,
         usage: None,
+        parser_version: PARSER_VERSION,
     }
 }
 fn item(source: &Source, name: &str) -> StrategyMember {
@@ -526,6 +528,339 @@ fn catalog_read_recovers_derived_group_availability_without_rewriting_saved_data
     assert!(public.sources[0].groups[0].supported);
     assert!(public.sources[0].groups[1].supported);
     assert!(!public.sources[0].groups[2].supported);
+}
+
+#[test]
+fn retained_legacy_nodes_revalidate_without_granting_tls_permission_or_writing() {
+    let _env = crate::modules::test_support::env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let temp = Temp::new();
+    let _restore = DataDir::set(&temp.0);
+    let file = temp.0.join("catalog.json");
+    let mut source = subscription_fixture();
+    source.parser_version = 0;
+    let tls = source
+        .catalog
+        .nodes
+        .iter_mut()
+        .find(|node| node.name == "TLS")
+        .unwrap();
+    tls.error = Some("PROXY_UNSUPPORTED_OPTION".into());
+    source.catalog.nodes[0].error = Some("PROXY_UNSUPPORTED_OPTION".into());
+    // A separate source contains an existing explicit permission.
+    let mut approved = source.clone();
+    approved.id = "approved".into();
+    approved
+        .catalog
+        .nodes
+        .iter_mut()
+        .find(|node| node.name == "TLS")
+        .unwrap()
+        .error = None;
+    mutate(&file, |store| {
+        store.sources = vec![source, approved];
+        Ok(())
+    })
+    .unwrap();
+    let before = fs::read(&file).unwrap();
+    let loaded = read(&file).unwrap();
+    assert_eq!(
+        fs::read(&file).unwrap(),
+        before,
+        "reading does not migrate or rewrite storage"
+    );
+    assert!(loaded.sources[0].catalog.nodes[0].error.is_none());
+    assert_eq!(
+        loaded.sources[0].catalog.nodes[3].error.as_deref(),
+        Some("PROXY_TLS_INSECURE")
+    );
+    assert!(
+        loaded.sources[1].catalog.nodes[3].error.is_none(),
+        "keep an existing explicit permission"
+    );
+    assert!(view(&loaded)
+        .sources
+        .iter()
+        .all(|source| !source.needs_refresh));
+}
+
+#[test]
+fn legacy_missing_definitions_request_explicit_refresh_but_current_rejections_do_not() {
+    let mut legacy = subscription_fixture();
+    legacy.parser_version = 0;
+    legacy.catalog.nodes[3].outbound = None;
+    legacy.catalog.nodes[3].error = Some("PROXY_UNSUPPORTED_OPTION".into());
+    let mut current = legacy.clone();
+    current.parser_version = PARSER_VERSION;
+    current.id = "current".into();
+    let mut serialized = serde_json::to_value(&legacy).unwrap();
+    serialized.as_object_mut().unwrap().remove("parser_version");
+    let legacy: Source = serde_json::from_value(serialized).unwrap();
+    let store = Store {
+        sources: vec![legacy, current],
+        ..Store::default()
+    };
+    let public = view(&store);
+    assert!(public.sources[0].needs_refresh);
+    assert!(!public.sources[1].needs_refresh);
+    assert!(!public.sources[0].nodes[3].supported);
+    let json = serde_json::to_string(&public).unwrap();
+    assert!(!json.contains("private-"));
+    assert!(!json.contains("parser_version"));
+}
+
+fn group_permission_fixture() -> Source {
+    let mut source = fixture();
+    source.catalog = parser::parse("proxies:\n  - {name: Stable, type: http, server: stable.example, port: 8080}\n  - {name: AT&T, type: hysteria2, server: one.example, port: 443, password: private-one, skip-cert-verify: true}\n  - {name: Starlink, type: hysteria2, server: two.example, port: 443, password: private-two, skip-cert-verify: true}\n  - {name: Outside, type: hysteria2, server: other.example, port: 443, password: private-other, skip-cert-verify: true}\nproxy-groups:\n  - {name: Child, type: url-test, proxies: [Starlink]}\n  - {name: US, type: url-test, proxies: [Stable, AT&T, Child, Starlink], url: https://check.example/group, interval: 300, tolerance: 80}\n  - {name: Other, type: url-test, proxies: [Outside]}\n").unwrap();
+    source
+}
+
+#[test]
+fn group_diagnostics_identify_tls_members_without_claiming_a_cycle() {
+    let source = group_permission_fixture();
+    let public = view(&Store {
+        sources: vec![source],
+        ..Store::default()
+    });
+    let group = &public.sources[0].groups[1];
+    assert!(!group.supported);
+    assert_eq!(group.error.as_deref(), Some("PROXY_TLS_INSECURE"));
+    assert_eq!(
+        group
+            .issues
+            .iter()
+            .map(|issue| (issue.name.as_str(), issue.error.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("AT&T", "PROXY_TLS_INSECURE"),
+            ("Starlink", "PROXY_TLS_INSECURE")
+        ]
+    );
+    assert_eq!(
+        group.insecure_node_ids.len(),
+        2,
+        "shared descendants are not repeated"
+    );
+    assert_eq!(
+        group.test_url.as_deref(),
+        Some("https://check.example/group")
+    );
+    assert_eq!(public.sources[0].nodes[0].udp, Some(false));
+    assert_eq!(public.sources[0].nodes[1].udp, Some(true));
+}
+
+#[test]
+fn group_tls_permission_is_atomic_revision_checked_and_scoped_to_descendants() {
+    let _env = crate::modules::test_support::env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let temp = Temp::new();
+    let _restore = DataDir::set(&temp.0);
+    let source = group_permission_fixture();
+    let source_id = source.id.clone();
+    let group_id = source.catalog.groups[1].id.clone();
+    let old_binding = binding::encode(
+        &source.id,
+        &source.name,
+        &source.catalog.nodes[0].id,
+        &source.catalog,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    mutate(&path().unwrap(), |store| {
+        store.sources.push(source);
+        Ok(())
+    })
+    .unwrap();
+    let account_file = temp.0.join("unrelated-account.json");
+    fs::write(&account_file, b"existing account and binding").unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let before = fs::read(path().unwrap()).unwrap();
+            assert_eq!(
+                set_group_insecure(source_id.clone(), group_id.clone(), "stale".into(), true)
+                    .await
+                    .err()
+                    .unwrap(),
+                "CATALOG_CHANGED"
+            );
+            assert_eq!(fs::read(path().unwrap()).unwrap(), before);
+            let allowed =
+                set_group_insecure(source_id.clone(), group_id.clone(), "v1".into(), true)
+                    .await
+                    .unwrap();
+            assert!(allowed.sources[0].groups[0].supported);
+            assert!(allowed.sources[0].groups[1].supported);
+            assert!(!allowed.sources[0].groups[2].supported);
+            assert!(allowed.sources[0].nodes[1].supported && allowed.sources[0].nodes[2].supported);
+            assert!(
+                !allowed.sources[0].nodes[3].supported,
+                "other groups are untouched"
+            );
+            assert!(allowed.sources[0].groups[1].insecure_node_ids.is_empty());
+            let binding = snapshot(source_id.clone(), group_id.clone(), BTreeMap::new())
+                .await
+                .unwrap();
+            let groups =
+                binding::runtime_parts(serde_json::json!(binding::outbounds(&binding).unwrap()))
+                    .unwrap()
+                    .1;
+            let us = groups
+                .iter()
+                .find(|group| group["url"] == "https://check.example/group")
+                .unwrap();
+            assert_eq!(
+                us["proxies"].as_array().unwrap().len(),
+                4,
+                "all members and policy are retained"
+            );
+            assert_eq!(us["tolerance"], 80);
+            let revoked = set_group_insecure(
+                source_id,
+                group_id,
+                allowed.sources[0].revision.clone(),
+                false,
+            )
+            .await
+            .unwrap();
+            assert!(!revoked.sources[0].groups[1].supported);
+            assert_eq!(revoked.sources[0].groups[1].insecure_node_ids.len(), 2);
+        });
+    assert!(
+        binding::decode(&old_binding).is_ok(),
+        "existing account snapshots are unchanged"
+    );
+    assert_eq!(
+        fs::read(&account_file).unwrap(),
+        b"existing account and binding"
+    );
+}
+
+#[test]
+fn group_tls_permission_rejects_cycles_without_partial_writes() {
+    let _env = crate::modules::test_support::env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let temp = Temp::new();
+    let _restore = DataDir::set(&temp.0);
+    let mut source = group_permission_fixture();
+    source.catalog.groups[0].members.push("US".into());
+    let source_id = source.id.clone();
+    let group_id = source.catalog.groups[1].id.clone();
+    mutate(&path().unwrap(), |store| {
+        store.sources.push(source);
+        Ok(())
+    })
+    .unwrap();
+    let before = fs::read(path().unwrap()).unwrap();
+    let error = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(set_group_insecure(source_id, group_id, "v1".into(), true))
+        .err()
+        .unwrap();
+    assert_eq!(error, "SUBSCRIPTION_GROUP_CYCLE");
+    assert_eq!(fs::read(path().unwrap()).unwrap(), before);
+}
+
+#[test]
+fn latency_uses_selected_group_url_only_for_its_own_subtree() {
+    let source = group_permission_fixture();
+    let mut catalog = source.catalog;
+    catalog.nodes[2].error = None;
+    let us = &catalog.groups[1];
+    assert_eq!(
+        latency_target_url(&catalog, &catalog.nodes[0].id, Some(&us.id)).unwrap(),
+        "https://check.example/group"
+    );
+    assert_eq!(
+        latency_target_url(&catalog, &catalog.nodes[2].id, Some(&us.id)).unwrap(),
+        "https://check.example/group",
+        "parent URL applies to descendants measured under that group"
+    );
+    assert_eq!(
+        latency_target_url(&catalog, &catalog.nodes[0].id, None).unwrap(),
+        DEFAULT_LATENCY_URL
+    );
+    assert_eq!(
+        latency_target_url(&catalog, &catalog.nodes[0].id, Some(&catalog.groups[2].id))
+            .unwrap_err(),
+        "CATALOG_INVALID"
+    );
+    assert!(
+        latency_target_url(&catalog, &catalog.nodes[1].id, Some(&us.id)).is_err(),
+        "pending permission cannot start a probe"
+    );
+    assert!(latency_target_url(&catalog, &catalog.nodes[0].id, Some("missing")).is_err());
+    for url in [
+        "file:///tmp/test",
+        "https://user:private-password@check.example/",
+        "https://check.example/#secret",
+    ] {
+        catalog.groups[1].url = Some(url.into());
+        assert!(
+            latency_target_url(&catalog, &catalog.nodes[0].id, Some(&catalog.groups[1].id))
+                .is_err()
+        );
+        assert!(public_latency_url(&catalog.groups[1]).is_none());
+    }
+    catalog.groups[1].url = Some("https://check.example/?token=private-secret".into());
+    assert!(
+        public_latency_url(&catalog.groups[1]).is_none(),
+        "query secrets stay out of IPC"
+    );
+}
+
+#[test]
+fn latency_checks_only_target_reachability_while_group_permissions_remain_strict() {
+    let catalog = parser::parse("proxies:\n  - {name: Alpha, type: http, server: one.example, port: 8080}\n  - {name: Outside, type: http, server: other.example, port: 8080}\n  - {name: Pending, type: hysteria2, server: pending.example, port: 443, password: private-password, skip-cert-verify: true}\nproxy-groups:\n  - {name: MissingSibling, type: select, proxies: [Missing, Alpha, Pending], url: https://check.example/missing}\n  - {name: CycleSibling, type: select, proxies: [Loop, Child], url: https://check.example/cycle}\n  - {name: Loop, type: select, proxies: [Loop]}\n  - {name: Child, type: select, proxies: [Alpha, Pending]}\n").unwrap();
+    let alpha = &catalog.nodes[0].id;
+    let outside = &catalog.nodes[1].id;
+    let pending = &catalog.nodes[2].id;
+    for (group, expected_url, structural_error) in [
+        (
+            &catalog.groups[0],
+            "https://check.example/missing",
+            "SUBSCRIPTION_GROUP_MEMBER_MISSING",
+        ),
+        (
+            &catalog.groups[1],
+            "https://check.example/cycle",
+            "SUBSCRIPTION_GROUP_CYCLE",
+        ),
+    ] {
+        assert!(
+            group.error.is_none(),
+            "manual groups retain usable alternatives"
+        );
+        assert_eq!(
+            latency_target_url(&catalog, alpha, Some(&group.id)).unwrap(),
+            expected_url
+        );
+        assert_eq!(
+            latency_target_url(&catalog, outside, Some(&group.id)).unwrap_err(),
+            "CATALOG_INVALID"
+        );
+        assert_eq!(
+            latency_target_url(&catalog, pending, Some(&group.id)).unwrap_err(),
+            "CATALOG_INVALID"
+        );
+        assert_eq!(
+            parser::reachable_nodes(&catalog, &group.id).err().unwrap(),
+            structural_error,
+            "bulk certificate permissions still require the complete valid subtree"
+        );
+    }
+    assert_eq!(
+        latency_target_url(&catalog, alpha, Some(&catalog.groups[2].id)).unwrap_err(),
+        "CATALOG_INVALID",
+        "a cycle without any route to the target terminates and stays out of scope"
+    );
 }
 #[test]
 fn urls_and_names_fail_with_safe_errors() {

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import * as enginePrerequisite from '../utils/codexProxyEnginePrerequisite';
 
 const compiled = ts.transpileModule(readFileSync(new URL('./codexProxyCatalogService.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -11,7 +12,7 @@ function harness(invoke: (command: string, args?: unknown) => Promise<unknown>) 
   const exports: Record<string, any> = {};
   const timers = new Map<number, () => void>();
   let timerId = 0;
-  vm.runInNewContext(compiled, { exports, require: () => ({ invoke }),
+  vm.runInNewContext(compiled, { exports, require: (name: string) => name.endsWith('codexProxyEnginePrerequisite') ? enginePrerequisite : ({ invoke }),
     setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: (id: number) => timers.delete(id),
   });
@@ -130,7 +131,7 @@ test('blocking group members have a fixed explanation while bypass rules remain 
   assert.equal(service.isCatalogBlockingMember('REJECT secret'), false);
 });
 
-test('group measurements include direct supported leaves only and never expand nested global groups', () => {
+test('group browsing includes direct leaves only and keeps child groups separate', () => {
   const { service } = harness(async () => ({}));
   const data = { ...source, nodes: [...source.nodes, { ...node, id: 'other', name: 'Outside' }, { ...node, id: 'bad', name: 'Bad', supported: false }], groups: [
     group('root', 'Proxy', 'select', ['Auto', 'Tokyo', 'Bad', 'DIRECT']), group('auto', 'Auto', 'fallback', ['Proxy', 'Tokyo']),
@@ -141,6 +142,20 @@ test('group measurements include direct supported leaves only and never expand n
   assert.deepEqual(Array.from(service.catalogGroupNodes(data, 'root', true)), ['node', 'bad']);
 });
 
+test('latency candidates stay within the clicked group subtree, deduplicate cycles and skip unsupported nodes', () => {
+  const { service } = harness(async () => ({}));
+  const data = { ...source, nodes: [node, { ...node, id: 'osaka', name: 'Osaka' }, { ...node, id: 'us', name: 'US' }, { ...node, id: 'bad', name: 'Bad', supported: false }], groups: [
+    group('global', 'Global', 'select', ['Japan', 'America']),
+    group('japan', 'Japan', 'url-test', ['Tokyo', 'Nested', 'Bad', 'REJECT']),
+    group('nested', 'Nested', 'fallback', ['Osaka', 'Tokyo', 'Japan', 'Missing']),
+    group('america', 'America', 'url-test', ['US']),
+  ] };
+  assert.deepEqual(Array.from(service.catalogLatencyCandidates(data, 'japan')), ['node', 'osaka']);
+  assert.deepEqual(Array.from(service.catalogLatencyCandidates(data, 'america')), ['us']);
+  assert.deepEqual(Array.from(service.catalogLatencyCandidates(data, 'osaka')), ['osaka']);
+  for (const id of ['', 'missing', 'bad', 'REJECT']) assert.deepEqual(Array.from(service.catalogLatencyCandidates(data, id)), []);
+});
+
 test('latency IPC carries only node identity and source revision', async () => {
   const calls: unknown[] = [];
   const { service } = harness(async (command, args) => { calls.push({ command, args }); return {}; });
@@ -148,6 +163,17 @@ test('latency IPC carries only node identity and source revision', async () => {
   assert.equal(JSON.stringify(calls), JSON.stringify([{ command: 'codex_proxy_catalog_latency', args: { requestId: 'request', sourceId: 'source', nodeId: 'node', revision: 'revision' } }]));
   assert.equal(service.catalogErrorKey('IMPORT_AMBIGUOUS'), 'codex.proxy.catalog.ambiguous');
   assert.equal(service.catalogErrorKey('IMPORT_INVALID: user:password'), 'codex.proxy.catalog.failed');
+});
+
+test('group latency and certificate permission carry only scoped identities and revision', async () => {
+  const calls: unknown[] = [];
+  const { service } = harness(async (command, args) => { calls.push({ command, args }); return {}; });
+  await service.measureProxyLatency('request', 'source', 'node', 'revision', 'region');
+  await service.setProxyGroupInsecure('source', 'region', 'revision', true);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    { command: 'codex_proxy_catalog_latency', args: { requestId: 'request', sourceId: 'source', nodeId: 'node', revision: 'revision', groupId: 'region' } },
+    { command: 'codex_proxy_catalog_group_insecure', args: { sourceId: 'source', groupId: 'region', revision: 'revision', enabled: true } },
+  ]);
 });
 
 

@@ -12,7 +12,9 @@ import { defaultProxySelections, sourceDefaultDraft } from '../../utils/codexPro
 import { CodexProxyResourceForm, type ProxySourceDraft } from './CodexProxyResourceForm';
 import { StrategyEditorDialog, StrategyDeleteDialog } from './CodexProxyStrategyPanel';
 import { CodexProxyResourceNodes } from './CodexProxyResourceNodes';
+import { CodexProxyLatencyBadge } from './CodexProxyLatencyBadge';
 import { CodexProxySetupGuide } from './CodexProxySetupGuide';
+import { preflightCodexProxyEngine } from '../../services/codexProxyEngineService';
 import { proxyRemovalErrorKey, removeProxySourceWithRefresh, type ProxyRemovalProgress } from '../../utils/codexProxyRemoval';
 import { strategyCandidates, strategyKindKey, strategyKindOf } from '../../services/codexProxyStrategyService';
 import { formatProxyBytes, formatProxyDateTime } from '../../utils/codexProxyFormat';
@@ -31,6 +33,7 @@ export function CodexProxyResources({ onAssign, onBindingsChanged }: {
   const [catalog, setCatalog] = useState<ProxyCatalog>({ sources: [] });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
+  const [catalogPending, setCatalogPending] = useState(false);
   const [error, setError] = useState('');
   const [formError, setFormError] = useState('');
   const [adding, setAdding] = useState(false);
@@ -71,7 +74,7 @@ export function CodexProxyResources({ onAssign, onBindingsChanged }: {
   const source = catalog.sources.find((entry) => entry.id === sourceId);
   const deletingRevision = catalog.sources.find((entry) => entry.id === deleting?.id)?.revision;
   const latency = useProxyLatency(source);
-  const locked = !!busy || latency.running || !!defaultPending;
+  const locked = !!busy || !!defaultPending || catalogPending;
   const hasCandidates = useMemo(() => strategyCandidates(catalog.sources).length > 0, [catalog.sources]);
   const visibleSources = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -169,7 +172,7 @@ export function CodexProxyResources({ onAssign, onBindingsChanged }: {
   useEscCloseTopmost(!!deleting && busy !== 'remove', closeDelete);
 
   const run = async (action: string, job: (requestId: string) => Promise<void>, cancellable = false) => {
-    if (operation.current) return;
+    if (operation.current || catalogPending) return;
     operation.current = true; setBusy(action); setError(''); setFormError(''); setRenameError(''); setDeleteError('');
     const id = crypto.randomUUID();
     if (cancellable) request.current = id;
@@ -202,7 +205,7 @@ export function CodexProxyResources({ onAssign, onBindingsChanged }: {
   };
   /** Saves or clears the source default. Failures stay beside the controls with a retry. */
   const applyDefault = async (action: 'set' | 'clear') => {
-    if (operation.current || !source) return;
+    if (operation.current || catalogPending || !source) return;
     operation.current = true;
     setDefaultPending(action); setDefaultError(''); setDefaultRetry('');
     try {
@@ -232,7 +235,10 @@ export function CodexProxyResources({ onAssign, onBindingsChanged }: {
     const choices = single ? defaultProxySelections(entry, single.id) : null;
     const draft = remembered ?? (single && choices ? { itemId: single.id, groupId: entry.kind === 'strategy' ? single.id : '', selections: choices } : null);
     if (!draft) { if (sourceId !== entry.id) changeSource(entry.id); else setExpanded(true); return; }
-    onAssign(entry.id, draft.itemId, draft.selections, draft.groupId, catalog);
+    void run('prepare-assign', async () => {
+      await preflightCodexProxyEngine();
+      if (mounted.current) onAssign(entry.id, draft.itemId, draft.selections, draft.groupId, catalog);
+    });
   };
   const editSource = (entry: ProxyCatalogSource) => {
     changeSource(entry.id); setRenaming(true); setRenameValue(entry.name);
@@ -240,10 +246,18 @@ export function CodexProxyResources({ onAssign, onBindingsChanged }: {
   const cancelImport = () => {
     if (request.current) void cancelProxyCatalog(request.current).catch((caught) => setFormError(t(catalogErrorKey(caught))));
   };
+  const openAdd = () => void run('prepare-add', async () => {
+    await preflightCodexProxyEngine();
+    if (mounted.current) { setAdding(true); setFormError(''); setMenuId(''); }
+  });
+  const openStrategy = (id: string) => void run('prepare-strategy', async () => {
+    await preflightCodexProxyEngine();
+    if (mounted.current) { setStrategyEditing(id); setMenuId(''); }
+  });
 
   return <section ref={section} className="codex-proxy-resources" aria-label={t('codex.proxy.managerResources.title')}>
     <CodexProxySetupGuide empty={emptyCatalog} hasUsableProxies={hasUsableProxies} addDisabled={locked || adding}
-      onAdd={() => { setAdding(true); setFormError(''); setMenuId(''); }} />
+      onAdd={openAdd} />
     {!emptyCatalog && <div className="codex-resource-toolbar">
       <label className="codex-proxy-search codex-resource-catalog-search"><Search size={17} aria-hidden="true" />
         <input value={query} aria-label={t('codex.proxy.managerResources.search')} placeholder={t('codex.proxy.managerResources.search')} onChange={(event) => setQuery(event.target.value)} />
@@ -251,8 +265,8 @@ export function CodexProxyResources({ onAssign, onBindingsChanged }: {
       </label>
       <div className="codex-resource-toolbar-actions">
         <button type="button" className="btn btn-secondary" disabled={locked || !hasCandidates} title={!hasCandidates ? t('codex.proxy.catalog.strategyNoCandidates') : undefined}
-          onClick={() => { setStrategyEditing('new'); setMenuId(''); }}><Layers size={16} />{t('codex.proxy.managerResources.createGroup')}</button>
-        <button type="button" className="btn btn-primary" disabled={locked || adding} onClick={() => { setAdding(true); setFormError(''); setMenuId(''); }}><Plus size={16} />{t('codex.proxy.managerResources.add')}</button>
+          onClick={() => openStrategy('new')}><Layers size={16} />{t('codex.proxy.managerResources.createGroup')}</button>
+        <button type="button" className="btn btn-primary" disabled={locked || adding} onClick={openAdd}><Plus size={16} />{t('codex.proxy.managerResources.add')}</button>
       </div>
     </div>}
     {adding && <CodexProxyResourceForm busy={busy === 'import'} error={formError} onEdit={() => setFormError('')} onSubmit={submit} onCancel={cancelImport} onClose={() => { setAdding(false); setFormError(''); }} />}
@@ -260,7 +274,7 @@ export function CodexProxyResources({ onAssign, onBindingsChanged }: {
       {request.current && <button type="button" className="btn btn-secondary compact" onClick={() => void cancelProxyCatalog(request.current!).catch((caught) => setError(t(catalogErrorKey(caught))))}>{t('common.cancel')}</button>}</div>}
     {error && <div className="codex-proxy-page-error" role="alert" tabIndex={-1}>{error}
       {!source && <button type="button" className="btn btn-secondary compact" disabled={!!busy} onClick={() => void run('load', async () => { const next = await getProxyCatalog(); if (mounted.current) apply(next); })}>{t('common.retry')}</button>}</div>}
-    {latency.running && (!expanded || !visibleSources.some((entry) => entry.id === sourceId)) && <div className="codex-resource-progress" role="status"><RefreshCw size={15} className="loading-spinner" /><span>{t('codex.proxy.catalog.measureProgress', { completed: latency.completed, total: latency.total })}</span><button type="button" className="btn btn-secondary compact" onClick={latency.cancel}>{t('common.cancel')}</button></div>}
+    {latency.running && (!expanded || !visibleSources.some((entry) => entry.id === sourceId)) && <div className="codex-resource-progress"><button type="button" className="btn btn-secondary compact" onClick={latency.cancel}>{t('codex.proxy.cancelCheck')}</button></div>}
     {loading && !catalogKnown ? <p className="codex-proxy-page-note" role="status">{t('common.loading')}</p> : catalog.sources.length === 0 ? null : <>
       <div className="codex-resource-list-caption"><span>{t('codex.proxy.managerResources.count', { count: catalog.sources.length })}</span><span>{t('codex.proxy.managerResources.listHint')}</span></div>
       <div className="codex-resource-list">{visibleSources.map((entry) => {
@@ -280,7 +294,7 @@ export function CodexProxyResources({ onAssign, onBindingsChanged }: {
             <div className="codex-resource-entry-status">
               {entry.defaultInvalidated || entry.error ? <span className="codex-resource-entry-warning"><TriangleAlert size={13} />{t(entry.defaultInvalidated ? 'codex.proxy.catalog.defaultUnavailable' : catalogErrorKey(entry.error))}</span>
                 : entry.kind === 'subscription' && entry.usage ? <span>{t('codex.proxy.resources.usageLine', { used: formatProxyBytes(entry.usage.upload + entry.usage.download), total: entry.usage.total > 0 ? formatProxyBytes(entry.usage.total) : t('codex.proxy.resources.usageUnknown') })}</span>
-                  : measured?.status === 'success' ? <span>{measured.value.httpError ? 'HTTPS' : 'HTTP'} · {measured.value.latencyMs} ms</span> : <span>{t('codex.proxy.catalog.availabilityCount', { count: entry.nodes.length, available: entry.nodes.filter((node) => node.supported).length })}</span>}
+                  : measured?.status === 'success' ? <CodexProxyLatencyBadge result={measured} /> : <span>{t('codex.proxy.catalog.availabilityCount', { count: entry.nodes.length, available: entry.nodes.filter((node) => node.supported).length })}</span>}
               {entry.kind === 'subscription' && entry.usage?.expireAt ? <small>{t('codex.proxy.resources.expireLine', { date: formatProxyDateTime(entry.usage.expireAt) })}</small>
                 : <small>{t('codex.proxy.catalog.updatedAt', { time: formatProxyDateTime(entry.updatedAt) })}</small>}
             </div>
@@ -290,7 +304,7 @@ export function CodexProxyResources({ onAssign, onBindingsChanged }: {
                 <button type="button" className="btn btn-secondary compact codex-resource-more-trigger" disabled={locked} aria-expanded={menuId === entry.id} aria-label={t('codex.proxy.managerResources.more')}
                   onClick={() => setMenuId(menuId === entry.id ? '' : entry.id)}><MoreHorizontal size={18} /></button>
                 {menuId === entry.id && <div className="codex-resource-more-menu" role="group" aria-label={t('codex.proxy.managerResources.more')}>
-                  {strategy ? <button type="button" className="btn btn-secondary" onClick={() => { setStrategyEditing(entry.id); setMenuId(''); }}><Pencil size={14} />{t('codex.proxy.catalog.strategyEdit')}</button>
+                  {strategy ? <button type="button" className="btn btn-secondary" onClick={() => openStrategy(entry.id)}><Pencil size={14} />{t('codex.proxy.catalog.strategyEdit')}</button>
                     : <button type="button" className="btn btn-secondary" onClick={() => editSource(entry)}><Pencil size={14} />{t('codex.proxy.catalog.rename')}</button>}
                   {entry.kind === 'subscription' && <button type="button" className="btn btn-secondary" onClick={() => { setMenuId(''); void run('refresh', async (id) => { const next = await refreshProxyCatalog(id, entry.id); if (mounted.current) { apply(next); setResult(null); } }, true); }}><RefreshCw size={14} />{t('common.refresh')}</button>}
                   <button type="button" className="btn btn-secondary" onClick={() => { if (sourceId !== entry.id) changeSource(entry.id); setExpanded(true); setAdvanced(true); setMenuId(''); }}><Star size={14} />{t('common.advancedSettings')}</button>
@@ -304,13 +318,13 @@ export function CodexProxyResources({ onAssign, onBindingsChanged }: {
               <button type="button" className="btn btn-primary compact" disabled={locked || !renameValue.trim()} onClick={() => void run('rename', async () => { const next = await renameProxySource(source.id, renameValue); if (mounted.current) { apply(next); setRenaming(false); } })}>{t('common.save')}</button>
               <button type="button" className="btn btn-secondary compact" disabled={!!busy} onClick={() => { setRenaming(false); setRenameError(''); }}>{t('common.cancel')}</button>
               {renameError && <div className="codex-proxy-page-error" role="alert">{renameError}</div>}</div>}
-            {source.kind === 'strategy' ? <CodexProxyPicker key={source.id} source={source} itemId={itemId} selectedGroupId={groupId} selections={selectedChoices} busy={!!busy} latency={latency} choose={choose} chooseMember={chooseMember}
-              setInsecure={(nodeId, enabled) => void run('insecure', async () => { const next = await setProxyNodeInsecure(source.id, nodeId, source.revision, enabled); if (mounted.current) { apply(next); setResult(null); } })} />
+            {source.kind === 'strategy' ? <CodexProxyPicker key={source.id} source={source} itemId={itemId} selectedGroupId={groupId} selections={selectedChoices} busy={!!busy || !!defaultPending} latency={latency} choose={choose} chooseMember={chooseMember}
+              onCatalogChange={(next) => { apply(next); setResult(null); }} onPendingChange={setCatalogPending} />
               : <>
-                <CodexProxyResourceNodes key={source.id} source={source} itemId={itemId} busy={!!busy} latency={latency} onChoose={(id) => choose(id, '')}
+                <CodexProxyResourceNodes key={source.id} source={source} itemId={itemId} busy={locked} latency={latency} onChoose={(id) => choose(id, '')}
                   onInsecure={(nodeId, enabled) => void run('insecure', async () => { const next = await setProxyNodeInsecure(source.id, nodeId, source.revision, enabled); if (mounted.current) { apply(next); setResult(null); } })} />
                 {!!source.groups.length && <details className="codex-resource-group-options"><summary>{t('codex.proxy.catalog.groups')}</summary>
-                  <CodexProxyPicker key={source.id} source={source} itemId={itemId} selectedGroupId={groupId} selections={selectedChoices} busy={!!busy} latency={latency} choose={choose} chooseMember={chooseMember} />
+                  <CodexProxyPicker key={source.id} source={source} itemId={itemId} selectedGroupId={groupId} selections={selectedChoices} busy={!!busy || !!defaultPending} latency={latency} choose={choose} chooseMember={chooseMember} onCatalogChange={(next) => { apply(next); setResult(null); }} onPendingChange={setCatalogPending} />
                 </details>}
               </>}
             <div className="codex-resource-selection-bar">

@@ -5,6 +5,7 @@ import { Activity, Check, RefreshCw, Server, ShieldCheck, StickyNote, TriangleAl
 import type { CodexAccount } from '../../types/codex';
 import { proxySummary } from '../../utils/codexProxyPresentation';
 import { sourceDefaultDraft } from '../../utils/codexProxySelection';
+import { proxySourceInspectable } from '../../utils/codexProxyPickerModel';
 import { executeProxyBatch, proxyBatchCompletedSuccessfully, type BatchBindResult } from '../../utils/codexProxyBatch';
 import { summarizeProxyBatch, unifiedProxyActive } from '../../utils/codexProxyDraft';
 import { proxyErrorKey } from '../../services/codexAccountProxyService';
@@ -16,7 +17,7 @@ import { useModalScrollLock } from '../../hooks/useModalScrollLock';
 import { useModalFocusTrap } from '../../hooks/useModalFocusTrap';
 import { CodexProxyPicker } from './CodexProxyPicker';
 import { CodexProxyRecentRequests } from './CodexProxyRecentRequests';
-import { CodexProxyRuntimeStatusPanel } from './CodexProxyRuntimeStatus';
+import { CodexProxyRuntimeStatusPanel, useCodexProxyRuntimeStatus } from './CodexProxyRuntimeStatus';
 import { CodexProxyActivityPanel } from './CodexProxyActivityPanel';
 import { useProxyLatency } from './useProxyLatency';
 import { useCodexProxyAccountName, useCodexProxyExitEditor } from './useCodexProxyExitEditor';
@@ -29,21 +30,22 @@ export function CodexProxyAccountDialog({ accountId, initialTab, onClose, onAppl
   const { t } = useTranslation();
   const dialog = useRef<HTMLDivElement>(null);
   const editor = useCodexProxyExitEditor(accountId);
-  const { catalog, catalogLoading, catalogError, reloadCatalog, unified, goSection } = useCodexProxyWorkspace();
+  const { catalog, catalogLoading, catalogError, reloadCatalog, acceptCatalog, unified, goSection } = useCodexProxyWorkspace();
   const resolveName = useCodexProxyAccountName();
   const [tab, setTab] = useState(initialTab);
   const [mode, setMode] = useState<'follow' | 'independent'>(() => editor.bound ? 'independent' : 'follow');
   const [noteOpen, setNoteOpen] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [catalogPending, setCatalogPending] = useState(false);
   const previousBusy = useRef(editor.busy);
   const applied = useRef(onApplied);
   applied.current = onApplied;
   const closeAfterSave = useRef(onClose);
   closeAfterSave.current = onClose;
   const latency = useProxyLatency(editor.source);
-  const measuring = Boolean(editor.busy) || latency.running;
-  const availableSources = useMemo(() => catalog.sources.filter((entry) => entry.id === editor.savedBinding?.sourceId
-    || entry.nodes.some((node) => node.supported) || entry.groups.some((group) => group.supported)), [catalog, editor.savedBinding]);
+  const measuring = Boolean(editor.busy) || catalogPending;
+  const runtime = useCodexProxyRuntimeStatus(accountId, editor.savedBinding, tab === 'edit' && editor.saved);
+  const availableSources = useMemo(() => catalog.sources.filter(proxySourceInspectable), [catalog]);
   const activeUnified = unifiedProxyActive(unified);
   const sharedLabel = unified?.binding ? [unified.binding.sourceName, unified.binding.name, unified.binding.selectedName].filter(Boolean).join(' · ') : '';
   const effectiveLabel = editor.bound ? proxySummary(editor.savedBinding) : activeUnified ? sharedLabel : t('codex.proxy.modeDefault');
@@ -106,7 +108,7 @@ export function CodexProxyAccountDialog({ accountId, initialTab, onClose, onAppl
                     <SingleSelectDropdown value={editor.sourceId} disabled={measuring} ariaLabel={t('codex.proxy.catalog.sources')}
                       options={availableSources.map((entry) => ({ value: entry.id, label: entry.name }))} onChange={chooseSource} /></label>
                     {editor.source && <CodexProxyPicker source={editor.source} itemId={editor.itemId} selectedGroupId={editor.groupId}
-                      selections={editor.selections} busy={Boolean(editor.busy)} latency={latency}
+                      selections={editor.selections} busy={Boolean(editor.busy)} latency={latency} onCatalogChange={acceptCatalog} onPendingChange={setCatalogPending} runtimeStatus={runtime.status}
                       choose={(id, groupId) => { setSubmitted(false); editor.select({ sourceId: editor.sourceId, itemId: id, groupId, selections: {} }); }}
                       chooseMember={(id, member) => { setSubmitted(false); editor.select({ sourceId: editor.sourceId, itemId: editor.itemId,
                         groupId: editor.groupId, selections: { ...editor.selections, [id]: member } }); }} />}
@@ -140,7 +142,7 @@ export function CodexProxyAccountDialog({ accountId, initialTab, onClose, onAppl
       </div>
       <footer className="modal-footer"><button type="button" className="btn btn-secondary" disabled={Boolean(editor.busy) && !editor.testing} onClick={onClose}>{t('common.close')}</button>
         {tab === 'edit' && <button type="button" className="btn btn-primary" disabled={measuring || !canSave} onClick={submit}>
-          {editor.busy === 'save' || editor.busy === 'unbind' ? <RefreshCw size={15} className="loading-spinner" /> : <Check size={15} />}{t('common.save')}</button>}
+          {editor.busy === 'save' || editor.busy === 'unbind' ? <RefreshCw size={15} className="loading-spinner" /> : <Check size={15} />}{t(editor.busy === 'save' ? 'common.saving' : 'common.save')}</button>}
       </footer>
     </div>
     {noteOpen && editor.account && <CodexProxyNoteDialog account={editor.account} onClose={() => setNoteOpen(false)} />}

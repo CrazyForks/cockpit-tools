@@ -19,7 +19,7 @@ import '../../styles/pages/codex-proxy-accounts.css';
 /** Full-width assignments. Account editors and runtime polling exist only while requested. */
 export function CodexProxyAccountsSection() {
   const { t } = useTranslation();
-  const { accounts, selectedId, entryAccountId, selectAccount, catalog, catalogLoading, catalogError, unified, reloadUnified } = useCodexProxyWorkspace();
+  const { accounts, selectedId, entryAccountId, selectAccount, catalog, catalogLoading, catalogError, acceptCatalog, unified, reloadUnified } = useCodexProxyWorkspace();
   const resolveName = useCodexProxyAccountName();
   const eligible = useMemo(() => accounts.filter(canUseCodexAccountProxy), [accounts]);
   const [applied, setApplied] = useState<Record<string, ProxyBindingValue>>({});
@@ -117,7 +117,7 @@ export function CodexProxyAccountsSection() {
       {accounts.length > eligible.length && <> {t('codex.proxy.unified.unsupported', { count: accounts.length - eligible.length })}</>}</p>
     {dialog && eligible.some((entry) => entry.id === dialog.id) && <CodexProxyAccountDialog key={dialog.id} accountId={dialog.id} initialTab={dialog.tab}
       onClose={() => setDialog(null)} onApplied={(account) => { setApplied((old) => ({ ...old, [account.id]: account.egress_proxy ?? null })); reloadUnified(); }} />}
-    {batchOpen && <CodexProxyBatchBindDialog accounts={pickedAccounts} catalog={catalog} resolveDisplayName={resolveName} savedValue={savedValue}
+    {batchOpen && <CodexProxyBatchBindDialog accounts={pickedAccounts} catalog={catalog} resolveDisplayName={resolveName} savedValue={savedValue} onCatalogChange={acceptCatalog}
       onClose={() => { setBatchOpen(false); reloadUnified(); }} onApplied={recordApplied} />}
     {followOpen && <CodexProxyFollowDialog accounts={pickedAccounts.filter((entry) => savedValue(entry))} onApplied={recordApplied}
       onClose={() => { setFollowOpen(false); reloadUnified(); }} />}

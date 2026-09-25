@@ -27,6 +27,7 @@ export interface ProxyRuntimeRow {
   state: CodexProxyRuntimeState | 'ready' | 'failed' | 'entry_failed' | undefined;
   port: number | null | undefined;
   node: string | null | undefined;
+  selection?: import('../services/codexAccountProxyService').CodexProxySelection | null;
   entry?: CodexProxyDesktopEntryStatus;
   kernelState?: CodexProxyRuntimeState;
   kernelPort?: number | null;
@@ -57,6 +58,8 @@ export function proxyRuntimeRows(status: CodexProxyRuntimeStatus | null): ProxyR
   return (shared ? ['combined', 'desktop'] as const : ['account', 'sidecar', 'desktop'] as const).map((kind) => {
     const source = kind === 'combined' ? 'account' : kind;
     const row: ProxyRuntimeRow = { kind, state: status?.[source], port: status?.[`${source}Port`], node: status?.[`${source}Node`] };
+    const selection = status?.[`${source}Selection`];
+    if (selection && selection.name === row.node) row.selection = selection;
     const entry = kind === 'desktop' ? status?.desktopEntry : null;
     if (entry) {
       row.entry = entry;

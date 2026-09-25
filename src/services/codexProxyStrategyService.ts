@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { withProxyEnginePrerequisite } from '../utils/codexProxyEnginePrerequisite';
 import { catalogErrorKey, type ProxyCatalog, type ProxyCatalogNode, type ProxyCatalogSource } from './codexProxyCatalogService';
 
 /** Group strategies a self-built policy may use; they map to the engine's own group kinds. */
@@ -331,7 +332,7 @@ function timed<T>(pending: Promise<T>): Promise<T> {
 
 /** Saves one strategy and returns the full catalog view the panels render from. */
 export function saveProxyStrategy(draft: ProxyStrategyDraft): Promise<ProxyCatalog> {
-  return timed(invoke<ProxyCatalog>('codex_proxy_strategy_save', strategySaveArgs(draft)));
+  return withProxyEnginePrerequisite(timed(invoke<ProxyCatalog>('codex_proxy_strategy_save', strategySaveArgs(draft))));
 }
 
 export function removeProxyStrategy(id: string): Promise<ProxyCatalog> {

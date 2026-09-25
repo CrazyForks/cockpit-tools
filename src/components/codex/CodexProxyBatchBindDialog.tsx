@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { preflightCodexProxyEngine } from '../../services/codexProxyEngineService';
 import { Activity, Check, RefreshCw, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import type { CodexAccount } from '../../types/codex';
 import { SingleSelectDropdown } from '../SingleSelectDropdown';
 import { ModalErrorMessage } from '../ModalErrorMessage';
 import { CodexProxyPicker } from './CodexProxyPicker';
 import { useProxyLatency } from './useProxyLatency';
+import { proxySourceInspectable } from '../../utils/codexProxyPickerModel';
 import { useEscCloseTopmost } from '../../hooks/useEscClose';
 import { useModalScrollLock } from '../../hooks/useModalScrollLock';
 import { useModalFocusTrap } from '../../hooks/useModalFocusTrap';
@@ -24,6 +26,7 @@ interface Props {
   /** The accounts picked on the page; binding only ever touches this list. */
   accounts: CodexAccount[];
   catalog: ProxyCatalog;
+  onCatalogChange?: (catalog: ProxyCatalog) => void;
   initialSourceId?: string;
   initialItemId?: string;
   initialGroupId?: string;
@@ -41,7 +44,7 @@ interface Props {
  */
 export function CodexProxyBatchBindDialog({
   accounts, catalog, initialSourceId, initialItemId, initialGroupId, initialSelections,
-  resolveDisplayName, savedValue, onClose, onApplied,
+  resolveDisplayName, savedValue, onClose, onApplied, onCatalogChange,
 }: Props) {
   const { t } = useTranslation();
   const dialog = useRef<HTMLDivElement>(null);
@@ -49,8 +52,7 @@ export function CodexProxyBatchBindDialog({
   const cancelled = useRef(false);
   const mounted = useRef(false);
   const running = useRef(false);
-  const availableSources = useMemo(() => catalog.sources.filter((entry) => entry.nodes.some((node) => node.supported)
-    || entry.groups.some((group) => group.supported)), [catalog]);
+  const availableSources = useMemo(() => catalog.sources.filter(proxySourceInspectable), [catalog]);
   /** Only a source default may prefill the dialog; an explicit seed from the resources page wins. */
   const initialSource = availableSources.find((entry) => entry.id === initialSourceId) ?? availableSources[0];
   const initialDefault = useMemo(() => sourceDefaultDraft(initialSource), [initialSource]);
@@ -61,6 +63,7 @@ export function CodexProxyBatchBindDialog({
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [catalogPending, setCatalogPending] = useState(false);
   const [probe, setProbe] = useState<CodexProxyProbeResult | null>(null);
   const [error, setError] = useState('');
   const [results, setResults] = useState<BatchBindResult[]>([]);
@@ -126,6 +129,8 @@ export function CodexProxyBatchBindDialog({
     setBusy(true); setError(''); setResults([]);
     setProgress({ current: 0, total: targets.length });
     try {
+      await preflightCodexProxyEngine();
+      if (!mounted.current || cancelled.current) return;
       let completed: BatchBindResult[] = [];
       await executeProxyBatch(targets, {
         cancelled: () => cancelled.current,
@@ -163,12 +168,12 @@ export function CodexProxyBatchBindDialog({
         <ModalErrorMessage message={error} />
         <div className="codex-proxy-batch-choice">
           <label className="codex-proxy-field"><span>{t('codex.proxy.catalog.sources')}</span>
-            <SingleSelectDropdown value={source?.id ?? ''} disabled={busy || testing} ariaLabel={t('codex.proxy.catalog.sources')}
+            <SingleSelectDropdown value={source?.id ?? ''} disabled={busy || testing || catalogPending} ariaLabel={t('codex.proxy.catalog.sources')}
               options={availableSources.map((entry) => ({ value: entry.id, label: entry.name }))} onChange={chooseSource} /></label>
           {source && <CodexProxyPicker key={source.id} source={source} itemId={itemId} selectedGroupId={groupId} selections={selectedChoices}
-            busy={busy || testing} latency={latency} choose={chooseItem} chooseMember={chooseMember} />}
+            busy={busy || testing} latency={latency} choose={chooseItem} chooseMember={chooseMember} onCatalogChange={onCatalogChange} onPendingChange={setCatalogPending} />}
           <div className="codex-proxy-batch-test">
-            <button type="button" className="btn btn-secondary" disabled={busy || testing || !ready} onClick={() => void checkNode()}>
+            <button type="button" className="btn btn-secondary" disabled={busy || testing || catalogPending || !ready} onClick={() => void checkNode()}>
               {testing ? <RefreshCw size={15} className="loading-spinner" /> : <Activity size={15} />}
               {t(testing ? 'codex.proxy.testing' : 'codex.proxy.test')}</button>
             {probe && <span className="codex-proxy-batch-probe"><ShieldCheck size={15} />{probe.protocol} · {probe.ip} · {probe.latencyMs} ms</span>}
@@ -200,7 +205,7 @@ export function CodexProxyBatchBindDialog({
           {busy
             ? <button type="button" className="btn btn-secondary" onClick={() => { cancelled.current = true; }}>{t('common.cancel')}</button>
             : <button type="button" className="btn btn-secondary" onClick={onClose}>{t('common.close')}</button>}
-          <button type="button" className="btn btn-primary" disabled={busy || testing || !ready || targets.length === 0} onClick={() => void run()}>
+          <button type="button" className="btn btn-primary" disabled={busy || testing || catalogPending || !ready || targets.length === 0} onClick={() => void run()}>
             {busy ? <RefreshCw size={15} className="loading-spinner" /> : <Check size={15} />}
             {t(busy ? 'codex.proxy.batchRunning' : 'codex.proxy.batchApply')}</button>
         </div>

@@ -1044,6 +1044,14 @@ pub async fn switch_codex_account(
     if launch_after_switch {
         let default_settings = crate::modules::codex_instance::load_default_settings()?;
         if default_settings.launch_mode != crate::models::InstanceLaunchMode::Cli {
+            if let Err(error) = crate::modules::codex_instance::preflight_egress_proxy_for_bind_account(Some(&account_id)).await {
+                let _ = app.emit("codex:switch-progress", serde_json::json!({
+                    "accountId": account_id, "type": "error", "error": error, "canRetry": true,
+                }));
+                progress_guard.completed = true;
+                return Err(error);
+            }
+            ensure_codex_switch_not_cancelled(&account_id)?;
             process::ensure_codex_launch_path_configured()?;
         }
     }

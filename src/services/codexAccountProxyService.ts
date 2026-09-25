@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { CodexAccount } from '../types/codex';
+import { proxyEnginePrerequisiteKey, withProxyEnginePrerequisite } from '../utils/codexProxyEnginePrerequisite';
 
 export interface CodexProxyProbeResult {
   ip: string;
@@ -38,16 +39,20 @@ export interface CodexProxyRuntimeStatus {
   accountNode?: string | null;
   desktopNode?: string | null;
   sidecarNode?: string | null;
+  accountSelection?: CodexProxySelection | null;
+  desktopSelection?: CodexProxySelection | null;
+  sidecarSelection?: CodexProxySelection | null;
   desktopEntry?: CodexProxyDesktopEntryStatus | null;
   proxySource?: 'account' | 'unified' | 'none';
   effectiveProxy?: CodexAccount['egress_proxy'];
 }
+export interface CodexProxySelection { name: string; delayMs: number | null; checkedAt: number | null }
 export function getCodexProxyRuntimeStatus(accountId: string): Promise<CodexProxyRuntimeStatus> {
   return invoke('get_codex_account_proxy_status', { accountId });
 }
 
 export function testCodexAccountProxy(accountId: string, requestId: string, proxyUrl: string | null): Promise<CodexProxyProbeResult> {
-  return invoke('test_codex_account_egress_proxy', { accountId, requestId, proxyUrl });
+  return withProxyEnginePrerequisite(invoke('test_codex_account_egress_proxy', { accountId, requestId, proxyUrl }));
 }
 
 export function cancelCodexAccountProxy(accountId: string, requestId: string): Promise<void> {
@@ -55,6 +60,8 @@ export function cancelCodexAccountProxy(accountId: string, requestId: string): P
 }
 
 export function proxyErrorKey(error: unknown, fallback: 'saveFailed' | 'probeFailed' = 'saveFailed'): string {
+  const prerequisite = proxyEnginePrerequisiteKey(error);
+  if (prerequisite) return prerequisite;
   const code = String(error).replace(/^Error:\s*/, '');
   if (code === 'UNIFIED_PROXY_STORAGE' || code === 'UNIFIED_PROXY_LOADING') return 'codex.proxy.unified.errorRead';
   if (code === 'UNIFIED_PROXY_TIMEOUT') return 'codex.proxy.unified.errorTimeout';

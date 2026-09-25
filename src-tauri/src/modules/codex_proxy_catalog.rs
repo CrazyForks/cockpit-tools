@@ -28,6 +28,8 @@ const MAX_BODY: usize = 2 * 1024 * 1024;
 const MAX_STORE: u64 = 32 * 1024 * 1024;
 const MAX_SOURCES: usize = 32;
 const REFRESH_INTERVAL_MS: i64 = 6 * 60 * 60 * 1000;
+const PARSER_VERSION: u8 = 1;
+const DEFAULT_LATENCY_URL: &str = "http://www.gstatic.com/generate_204";
 static DOWNLOADS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 static IO: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 static JOBS: LazyLock<Mutex<HashMap<String, Job>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -62,6 +64,10 @@ struct Source {
     /// 手动来源与旧文件缺失该字段时按“没有用量信息”处理。
     #[serde(default)]
     usage: Option<SourceUsage>,
+    /// Only successful explicit import/refresh advances this marker. Old
+    /// rejected nodes without retained definitions need the user's refresh.
+    #[serde(default)]
+    parser_version: u8,
 }
 /// 订阅用量（`subscription-userinfo` 响应头）：全部为数字，单位为字节与毫秒时间戳。
 #[derive(Clone, Serialize, Deserialize)]
@@ -133,6 +139,7 @@ pub struct SourceView {
     last_attempt_at: Option<i64>,
     auto_update: bool,
     error: Option<String>,
+    needs_refresh: bool,
     default: Option<SourceDefaultView>,
     default_invalidated: bool,
     /// 仅策略来源有值：编辑弹框据此恢复上次保存的健康检查参数。
@@ -157,6 +164,7 @@ pub struct NodeView {
     server: Option<String>,
     port: Option<u16>,
     insecure: bool,
+    udp: Option<bool>,
     id: String,
     name: String,
     protocol: String,
@@ -164,6 +172,7 @@ pub struct NodeView {
     error: Option<String>,
 }
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GroupView {
     id: String,
     name: String,
@@ -171,83 +180,207 @@ pub struct GroupView {
     members: Vec<String>,
     supported: bool,
     error: Option<String>,
+    issues: Vec<parser::GroupIssue>,
+    insecure_node_ids: Vec<String>,
+    test_url: Option<String>,
 }
+fn node_udp(node: &parser::ParsedNode) -> Option<bool> {
+    let outbound = node.outbound.as_ref()?;
+    let native = if outbound["type"] == "mihomo" {
+        &outbound["proxy"]
+    } else {
+        outbound
+    };
+    match native["type"].as_str()? {
+        "hysteria" | "hysteria2" | "tuic" => Some(true),
+        "http" | "ssh" => Some(false),
+        "ss" | "ssr" | "shadowsocks" | "socks" | "socks5" | "vmess" | "vless" | "trojan"
+        | "wireguard" | "snell" | "anytls" | "mieru" => {
+            Some(native.get("udp").and_then(Value::as_bool).unwrap_or(false))
+        }
+        _ => None,
+    }
+}
+
+fn latency_url(group: Option<&parser::ParsedGroup>) -> Result<String, String> {
+    let raw = group
+        .and_then(|group| group.url.as_deref())
+        .unwrap_or(DEFAULT_LATENCY_URL);
+    let url = url::Url::parse(raw).map_err(|_| "CATALOG_INVALID")?;
+    if raw.len() > 2048
+        || raw.chars().any(char::is_control)
+        || !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("CATALOG_INVALID".into());
+    }
+    Ok(url.into())
+}
+
+fn public_latency_url(group: &parser::ParsedGroup) -> Option<String> {
+    let raw = latency_url(Some(group)).ok()?;
+    let url = url::Url::parse(&raw).ok()?;
+    // A custom health-check URL can contain a secret query even without URL
+    // userinfo; it may be used locally but must not enter display metadata.
+    if url.query().is_some() {
+        return None;
+    }
+    Some(raw)
+}
+
+fn latency_target_url(
+    catalog: &ParsedCatalog,
+    node_id: &str,
+    group_id: Option<&str>,
+) -> Result<String, String> {
+    let node = catalog
+        .nodes
+        .iter()
+        .find(|node| node.id == node_id && node.error.is_none() && node.outbound.is_some())
+        .ok_or("CATALOG_INVALID")?;
+    let group = group_id
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            catalog
+                .groups
+                .iter()
+                .find(|group| group.id == id)
+                .ok_or("CATALOG_NOT_FOUND")
+        })
+        .transpose()?;
+    if let Some(group) = group {
+        // A probe runs this one authorized node, not the whole group policy.
+        // Unrelated missing/cyclic branches must not hide a reachable healthy
+        // candidate. Group permission transactions keep their strict traversal.
+        let groups: HashMap<_, _> = catalog
+            .groups
+            .iter()
+            .map(|group| (group.name.as_str(), group))
+            .collect();
+        let mut visited = HashSet::new();
+        let mut pending = vec![group];
+        let mut reachable = false;
+        while let Some(group) = pending.pop() {
+            if !visited.insert(group.name.as_str()) {
+                continue;
+            }
+            if group.members.contains(&node.name) {
+                reachable = true;
+                break;
+            }
+            pending.extend(
+                group
+                    .members
+                    .iter()
+                    .filter_map(|name| groups.get(name.as_str()).copied()),
+            );
+        }
+        if !reachable {
+            return Err("CATALOG_INVALID".into());
+        }
+    }
+    latency_url(group)
+}
+
 fn view(store: &Store) -> CatalogView {
     CatalogView {
         sources: store
             .sources
             .iter()
-            .map(|s| SourceView {
-                network: s.network.clone(),
-                id: s.id.clone(),
-                name: s.name.clone(),
-                kind: s.kind.clone(),
-                updated_at: s.updated_at,
-                revision: s.revision.clone(),
-                last_attempt_at: s.last_attempt_at,
-                auto_update: s.auto_update,
-                error: s.error.clone(),
-                default: s.default.as_ref().map(|d| SourceDefaultView {
-                    item_id: d.item_id.clone(),
-                    group_id: d.group_id.clone(),
-                    selections: d.selections.clone(),
-                }),
-                default_invalidated: s.default_invalidated,
-                strategy_options: (s.kind == strategy::KIND)
-                    .then(|| strategy::options_view(&s.catalog))
-                    .flatten(),
-                usage: (s.kind == "subscription")
-                    .then(|| s.usage.clone())
-                    .flatten(),
-                strategy_members: (s.kind == strategy::KIND)
-                    .then(|| s.strategy_members.clone())
-                    .flatten(),
-                nodes: s
-                    .catalog
-                    .nodes
-                    .iter()
-                    .map(|n| NodeView {
-                        server: n.outbound.as_ref().and_then(|v| {
-                            let endpoint = if v["type"] == "mihomo" {
-                                &v["proxy"]
-                            } else {
-                                v
-                            };
-                            endpoint["server"].as_str().map(str::to_owned)
-                        }),
-                        port: n.outbound.as_ref().and_then(|v| {
-                            let endpoint = if v["type"] == "mihomo" {
-                                &v["proxy"]
-                            } else {
-                                v
-                            };
-                            endpoint
-                                .get("port")
-                                .or_else(|| endpoint.get("server_port"))
-                                .and_then(serde_json::Value::as_u64)
-                                .and_then(|port| u16::try_from(port).ok())
-                        }),
-                        insecure: n.outbound.as_ref().is_some_and(|v| binding::is_insecure(v)),
-                        id: n.id.clone(),
-                        name: n.name.clone(),
-                        protocol: n.protocol.clone(),
-                        supported: n.error.is_none() && n.outbound.is_some(),
-                        error: n.error.clone(),
-                    })
-                    .collect(),
-                groups: s
-                    .catalog
-                    .groups
-                    .iter()
-                    .map(|g| GroupView {
-                        id: g.id.clone(),
-                        name: g.name.clone(),
-                        kind: g.kind.clone(),
-                        members: g.members.clone(),
-                        supported: g.error.is_none() && strategy::group_supported(&s.kind, &g.kind),
-                        error: g.error.clone(),
-                    })
-                    .collect(),
+            .map(|s| {
+                let issues = parser::group_issues(&s.catalog);
+                SourceView {
+                    network: s.network.clone(),
+                    id: s.id.clone(),
+                    name: s.name.clone(),
+                    kind: s.kind.clone(),
+                    updated_at: s.updated_at,
+                    revision: s.revision.clone(),
+                    last_attempt_at: s.last_attempt_at,
+                    auto_update: s.auto_update,
+                    error: s.error.clone(),
+                    needs_refresh: s.parser_version < PARSER_VERSION
+                        && s.kind == "subscription"
+                        && s.catalog
+                            .nodes
+                            .iter()
+                            .any(|node| node.outbound.is_none() && node.error.is_some()),
+                    default: s.default.as_ref().map(|d| SourceDefaultView {
+                        item_id: d.item_id.clone(),
+                        group_id: d.group_id.clone(),
+                        selections: d.selections.clone(),
+                    }),
+                    default_invalidated: s.default_invalidated,
+                    strategy_options: (s.kind == strategy::KIND)
+                        .then(|| strategy::options_view(&s.catalog))
+                        .flatten(),
+                    usage: (s.kind == "subscription")
+                        .then(|| s.usage.clone())
+                        .flatten(),
+                    strategy_members: (s.kind == strategy::KIND)
+                        .then(|| s.strategy_members.clone())
+                        .flatten(),
+                    nodes: s
+                        .catalog
+                        .nodes
+                        .iter()
+                        .map(|n| NodeView {
+                            server: n.outbound.as_ref().and_then(|v| {
+                                let endpoint = if v["type"] == "mihomo" {
+                                    &v["proxy"]
+                                } else {
+                                    v
+                                };
+                                endpoint["server"].as_str().map(str::to_owned)
+                            }),
+                            port: n.outbound.as_ref().and_then(|v| {
+                                let endpoint = if v["type"] == "mihomo" {
+                                    &v["proxy"]
+                                } else {
+                                    v
+                                };
+                                endpoint
+                                    .get("port")
+                                    .or_else(|| endpoint.get("server_port"))
+                                    .and_then(serde_json::Value::as_u64)
+                                    .and_then(|port| u16::try_from(port).ok())
+                            }),
+                            insecure: n.outbound.as_ref().is_some_and(|v| binding::is_insecure(v)),
+                            udp: node_udp(n),
+                            id: n.id.clone(),
+                            name: n.name.clone(),
+                            protocol: n.protocol.clone(),
+                            supported: n.error.is_none() && n.outbound.is_some(),
+                            error: n.error.clone(),
+                        })
+                        .collect(),
+                    groups: s
+                        .catalog
+                        .groups
+                        .iter()
+                        .zip(issues)
+                        .map(|(g, issues)| GroupView {
+                            id: g.id.clone(),
+                            name: g.name.clone(),
+                            kind: g.kind.clone(),
+                            members: g.members.clone(),
+                            supported: g.error.is_none()
+                                && strategy::group_supported(&s.kind, &g.kind),
+                            error: g.error.clone(),
+                            issues,
+                            insecure_node_ids: parser::reachable_nodes(&s.catalog, &g.id)
+                                .unwrap_or_default()
+                                .into_iter()
+                                .filter(|node| node.error.as_deref() == Some("PROXY_TLS_INSECURE"))
+                                .map(|node| node.id.clone())
+                                .collect(),
+                            test_url: public_latency_url(g),
+                        })
+                        .collect(),
+                }
             })
             .collect(),
     }
@@ -346,6 +479,7 @@ fn read(path: &Path) -> Result<Store, String> {
         return Err("CATALOG_STORAGE".into());
     }
     for source in &mut store.sources {
+        parser::revalidate_retained_nodes(&mut source.catalog);
         revalidate_groups(&mut source.catalog).map_err(|_| "CATALOG_STORAGE")?;
     }
     Ok(store)
@@ -581,30 +715,55 @@ pub async fn latency(
     source_id: String,
     node_id: String,
     revision: String,
+    group_id: Option<String>,
 ) -> Result<super::codex_proxy_probe::LatencyResult, String> {
-    let op = Operation::begin(request_id)?;
-    cancellable(&op, async {
-        tokio::time::timeout(Duration::from_secs(10), async {
+    latency_with_preflight(
+        request_id,
+        Duration::from_secs(10),
+        super::codex_proxy_engine_preflight::require(),
+        async {
             let s = source(&source_id).await?;
             if s.revision != revision {
                 return Err("CATALOG_CHANGED".into());
             }
-            if !s
-                .catalog
-                .nodes
-                .iter()
-                .any(|n| n.id == node_id && n.error.is_none())
-            {
-                return Err("CATALOG_INVALID".into());
-            }
-            let input = blocking(move || {
-                binding::with_network(
+            let (input, test_url) = blocking(move || {
+                let test_url = latency_target_url(&s.catalog, &node_id, group_id.as_deref())?;
+                let input = binding::with_network(
                     &binding::encode(&s.id, &s.name, &node_id, &s.catalog, &BTreeMap::new())?,
                     s.network,
-                )
+                )?;
+                Ok((input, test_url))
             })
             .await?;
-            super::codex_proxy_probe::latency_resource(input).await
+            super::codex_proxy_probe::latency_resource(input, test_url).await
+        },
+    )
+    .await
+}
+
+/// Preparation belongs to the same cancellable deadline as the node request.
+/// The shared engine check may finish for other callers after cancellation, but
+/// this operation can no longer start its catalog read or temporary engine.
+async fn latency_with_preflight<T>(
+    request_id: String,
+    timeout: Duration,
+    preflight: impl std::future::Future<Output = Result<(), String>>,
+    work: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    let op = Operation::begin(request_id)?;
+    cancellable(&op, async {
+        let deadline = tokio::time::Instant::now() + timeout;
+        tokio::time::timeout_at(deadline, async {
+            preflight.await?;
+            // Cancellation and a completed preflight can become ready together.
+            // Recheck before work so select ordering cannot start a stale probe.
+            if op.state.load(Ordering::Acquire) == 1 {
+                return Err("CATALOG_CANCELLED".into());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err("PROXY_PROBE_TIMEOUT".into());
+            }
+            work.await
         })
         .await
         .map_err(|_| "PROXY_PROBE_TIMEOUT".to_string())?
@@ -957,6 +1116,7 @@ pub async fn import(
                     default_invalidated: false,
                     strategy_members: None,
                     usage,
+                    parser_version: PARSER_VERSION,
                 });
                 Ok(view(store))
             })
@@ -1089,6 +1249,7 @@ pub async fn save_strategy(
                     }
                     source.name = name;
                     source.catalog = catalog;
+                    source.parser_version = PARSER_VERSION;
                     // 编辑保存整体替换身份记录，绝不追加历史成员。
                     source.strategy_members = Some(records);
                     source.error = None;
@@ -1113,6 +1274,7 @@ pub async fn save_strategy(
                     default_invalidated: false,
                     strategy_members: Some(records),
                     usage: None,
+                    parser_version: PARSER_VERSION,
                 }),
             }
             Ok(view(store))
@@ -1155,6 +1317,7 @@ pub async fn refresh(request_id: String, source_id: String) -> Result<CatalogVie
                 let mut catalog = catalog;
                 preserve_permissions(&s.catalog, &mut catalog)?;
                 s.catalog = catalog;
+                s.parser_version = PARSER_VERSION;
                 // 节点消失时不静默换节点：清除默认项，由资源和账号页提示用户重新设置。
                 drop_invalid_default(s);
                 s.updated_at = chrono::Utc::now().timestamp_millis();
@@ -1534,6 +1697,58 @@ pub async fn set_insecure(
     })
     .await
 }
+
+/// This is an explicit permission transaction, never an automatic repair. All
+/// affected definitions are validated before any permission or revision changes.
+pub async fn set_group_insecure(
+    source_id: String,
+    group_id: String,
+    revision: String,
+    enabled: bool,
+) -> Result<CatalogView, String> {
+    let guard = SourceGuard::new(source_id.clone())?;
+    blocking(move || {
+        let _guard = guard;
+        mutate(&path()?, |store| {
+            let source = store
+                .sources
+                .iter_mut()
+                .find(|source| source.id == source_id)
+                .ok_or("CATALOG_NOT_FOUND")?;
+            if source.revision != revision {
+                return Err("CATALOG_CHANGED".into());
+            }
+            let nodes = parser::reachable_nodes(&source.catalog, &group_id)?;
+            let mut ids = HashSet::new();
+            for node in nodes {
+                if !node.outbound.as_ref().is_some_and(binding::is_insecure) {
+                    continue;
+                }
+                if node
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error != "PROXY_TLS_INSECURE")
+                {
+                    return Err("CATALOG_INVALID".into());
+                }
+                ids.insert(node.id.clone());
+            }
+            if ids.is_empty() {
+                return Err("CATALOG_INVALID".into());
+            }
+            for node in &mut source.catalog.nodes {
+                if ids.contains(&node.id) {
+                    node.error = (!enabled).then(|| "PROXY_TLS_INSECURE".into());
+                }
+            }
+            revalidate_groups(&mut source.catalog)?;
+            drop_invalid_default(source);
+            source.revision = uuid::Uuid::new_v4().to_string();
+            Ok(view(store))
+        })
+    })
+    .await
+}
 pub async fn snapshot(
     source_id: String,
     item_id: String,
@@ -1619,3 +1834,7 @@ pub async fn auto_refresh_loop() {
 #[cfg(test)]
 #[path = "codex_proxy_catalog_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "codex_proxy_catalog_latency_tests.rs"]
+mod latency_tests;

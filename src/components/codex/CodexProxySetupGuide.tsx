@@ -15,7 +15,7 @@ export function CodexProxySetupGuide({ empty, hasUsableProxies, onAdd, addDisabl
   const { t } = useTranslation();
   const engine = useCodexProxyEngine();
   const stage = proxySetupStage(engine.readiness, hasUsableProxies);
-  const missing = !empty && hasUsableProxies !== null && engine.readiness === 'missing';
+  const missing = !empty && hasUsableProxies !== null && ['missing', 'failed'].includes(engine.readiness);
   return <div className={`codex-proxy-setup${empty ? ' is-first-use' : ''}`}>
     {empty && <header className="codex-proxy-setup-heading"><h2>{t('codex.proxy.setup.title')}</h2><p>{t('codex.proxy.setup.intro')}</p></header>}
     {missing && <p className="codex-proxy-setup-notice" role="status">{t('codex.proxy.setup.missing')}</p>}

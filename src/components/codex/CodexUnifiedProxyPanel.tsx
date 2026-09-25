@@ -9,6 +9,7 @@ import {
   type CodexUnifiedProxyPreview, type CodexUnifiedProxyView,
 } from '../../services/codexUnifiedProxyService';
 import { defaultProxySelections, restoreProxySelection, savedRootProxySelections, sourceDefaultDraft } from '../../utils/codexProxySelection';
+import { proxySourceInspectable } from '../../utils/codexProxyPickerModel';
 import { useEscCloseTopmost } from '../../hooks/useEscClose';
 import { useModalScrollLock } from '../../hooks/useModalScrollLock';
 import { useModalFocusTrap } from '../../hooks/useModalFocusTrap';
@@ -24,6 +25,7 @@ interface Props {
   /** Every account on the page, including kinds that can never use an egress proxy. */
   totalAccounts: number;
   catalog: ProxyCatalog;
+  onCatalogChange?: (catalog: ProxyCatalog) => void;
   view: CodexUnifiedProxyView | null;
   onViewChange: (view: CodexUnifiedProxyView) => void;
   onGoResources: () => void;
@@ -122,7 +124,7 @@ export function CodexUnifiedProxyDialog({ kind, sourceId, itemId, groupId, selec
         <button type="button" className="btn btn-secondary" disabled={busy} onClick={onClose}>{t('common.cancel')}</button>
         <button type="button" className={kind === 'disable' ? 'btn btn-danger' : 'btn btn-primary'}
           disabled={busy || loading || (kind !== 'disable' && !preview)} onClick={() => void confirm()}>
-          {busy ? <RefreshCw size={15} className="loading-spinner" /> : <Check size={15} />}{t(copy.confirm)}</button>
+          {busy ? <RefreshCw size={15} className="loading-spinner" /> : <Check size={15} />}{t(busy && kind !== 'disable' ? 'common.saving' : copy.confirm)}</button>
       </footer>
     </div>
   </div>, document.body);
@@ -132,12 +134,13 @@ export function CodexUnifiedProxyDialog({ kind, sourceId, itemId, groupId, selec
  * One shared exit for every eligible account. The binding stays a catalog reference on the
  * backend, so accounts added later follow it without any per-account write.
  */
-export function CodexUnifiedProxyPanel({ totalAccounts, catalog, view, onViewChange, onGoResources }: Props) {
+export function CodexUnifiedProxyPanel({ totalAccounts, catalog, view, onViewChange, onGoResources, onCatalogChange }: Props) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState<{ sourceId: string; itemId: string; groupId: string; selections: ProxyCatalogSelections } | null>(null);
   const [editing, setEditing] = useState(false);
   const editorDialog = useRef<HTMLDivElement>(null);
   const [testing, setTesting] = useState(false);
+  const [catalogPending, setCatalogPending] = useState(false);
   const [probe, setProbe] = useState<CodexProxyProbeResult | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -147,8 +150,7 @@ export function CodexUnifiedProxyPanel({ totalAccounts, catalog, view, onViewCha
   const probeGeneration = useRef(0);
 
   const active = view?.mode === 'all_accounts' && Boolean(view?.binding);
-  const availableSources = useMemo(() => catalog.sources.filter((entry) => entry.nodes.some((node) => node.supported)
-    || entry.groups.some((group) => group.supported)), [catalog]);
+  const availableSources = useMemo(() => catalog.sources.filter(proxySourceInspectable), [catalog]);
   const restored = useMemo(() => restoreProxySelection(catalog, view?.binding ? {
     protocol: view.binding.protocol, sourceId: view.binding.sourceId, itemId: view.binding.itemId, groupId: view.binding.groupId,
   } : null), [catalog, view]);
@@ -234,7 +236,7 @@ export function CodexUnifiedProxyPanel({ totalAccounts, catalog, view, onViewCha
   const draftLabel = selected ? [source?.name ?? '', selected.name].filter(Boolean).join(' · ') : '';
   const dialogExit = dialog === 'disable' ? currentLabel : draftLabel || currentLabel;
   /** Both a probe and a latency batch hold the per-source guard, so no write may start beside them. */
-  const measuring = testing || latency.running;
+  const measuring = testing || catalogPending;
   const changeReady = selectionReady && !emptyCatalog && !measuring;
 
   return <section className="codex-proxy-unified" aria-labelledby="codex-proxy-unified-title">
@@ -274,7 +276,7 @@ export function CodexUnifiedProxyPanel({ totalAccounts, catalog, view, onViewCha
                 <SingleSelectDropdown value={sourceId} disabled={measuring} ariaLabel={t('codex.proxy.catalog.sources')}
                   options={availableSources.map((entry) => ({ value: entry.id, label: entry.name }))} onChange={chooseSource} /></label>
               {source && <CodexProxyPicker key={source.id} source={source} itemId={itemId} selectedGroupId={groupId}
-                selections={selectedChoices} busy={testing} latency={latency} choose={chooseItem} chooseMember={chooseMember} />}
+                selections={selectedChoices} busy={testing} latency={latency} choose={chooseItem} chooseMember={chooseMember} onCatalogChange={onCatalogChange} onPendingChange={setCatalogPending} />}
               <div className="codex-proxy-unified-test">
                 <button type="button" className="btn btn-secondary compact" disabled={measuring || !selectionReady} onClick={() => void checkExit()}>
                   {testing ? <RefreshCw size={15} className="loading-spinner" /> : <Activity size={15} />}{t(testing ? 'codex.proxy.testing' : 'codex.proxy.test')}</button>

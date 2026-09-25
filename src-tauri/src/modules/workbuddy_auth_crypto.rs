@@ -561,6 +561,9 @@ mod tests {
     #[test]
     fn concurrent_preparation_is_single_flight_and_failures_can_retry() {
         use std::sync::atomic::{AtomicUsize, Ordering};
+        // Other account tests may have already prepared the shared cache. This
+        // test exercises the cold-load path, so start with an empty cache.
+        *KEY_STATE.0.lock().unwrap() = KeyState::default();
         let calls = Arc::new(AtomicUsize::new(0));
         let barrier = Arc::new(std::sync::Barrier::new(8));
         let handles: Vec<_> = (0..8)

@@ -16,6 +16,10 @@ use tokio::{
     process::{Child, Command},
 };
 
+#[path = "codex_proxy_engine_delay.rs"]
+mod delay;
+pub(crate) use delay::validate_delay_url;
+
 pub const ENGINE_VERSION: &str = "1.19.31";
 const START_TIMEOUT: Duration = Duration::from_secs(8);
 static CHILDREN: LazyLock<Mutex<HashMap<uuid::Uuid, Weak<Mutex<Child>>>>> =
@@ -99,8 +103,55 @@ pub struct SelectionReader {
     names: BTreeMap<String, String>,
     groups: BTreeMap<String, Vec<String>>,
 }
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxySelection {
+    pub name: String,
+    pub delay_ms: Option<u64>,
+    pub checked_at: Option<i64>,
+}
+
+fn selection_history(name: String, value: &Value) -> ProxySelection {
+    let history = value["history"].as_array().and_then(|entries| entries.last());
+    let checked_at = history.and_then(|entry| entry["time"].as_str())
+        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+        .map(|time| time.timestamp_millis());
+    let delay_ms = history.and_then(|entry| entry["delay"].as_u64())
+        .filter(|delay| *delay > 0 && checked_at.is_some() && value["alive"] != false);
+    ProxySelection { name, delay_ms, checked_at }
+}
+
 impl SelectionReader {
     pub async fn selected_node(&self) -> Result<Option<String>, String> {
+        Ok(self.selected_tag().await?.and_then(|(tag, _)| self.names.get(&tag).cloned()))
+    }
+
+    /// Read the running engine's last health check for the selected leaf. Never
+    /// substitute a group delay or an unrelated UI probe for this node's history.
+    pub async fn selected_info(&self) -> Result<Option<ProxySelection>, String> {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let Some((tag, test_url)) = self.selected_tag().await? else { return Ok(None); };
+            let Some(name) = self.names.get(&tag).cloned() else { return Ok(None); };
+            let history = async {
+                let client = reqwest::Client::builder().no_proxy()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(Duration::from_millis(900)).build().map_err(|_| ())?;
+                let mut response = client.get(format!("{}/proxies/{}", self.endpoint, urlencoding::encode(&tag)))
+                    .bearer_auth(&self.secret).send().await.map_err(|_| ())?;
+                if !response.status().is_success() { return Err(()); }
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
+                    if bytes.len() + chunk.len() > 64 * 1024 { return Err(()); }
+                    bytes.extend_from_slice(&chunk);
+                }
+                serde_json::from_slice::<Value>(&bytes).map_err(|_| ())
+            }.await.unwrap_or(Value::Null);
+            let history = test_url.as_deref().and_then(|url| history["extra"].get(url)).unwrap_or(&history);
+            Ok(Some(selection_history(name, history)))
+        }).await.map_err(|_| "PROXY_STATUS_FAILED".to_string())?
+    }
+
+    async fn selected_tag(&self) -> Result<Option<(String, Option<String>)>, String> {
         // Total deadline includes nested selectors. Never follow a controller redirect
         // or inherit user/system proxy settings for the authenticated localhost query.
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -111,9 +162,10 @@ impl SelectionReader {
                 .build()
                 .map_err(|_| "PROXY_STATUS_FAILED")?;
             let mut tag = "account-node".to_owned();
+            let mut test_url = None;
             for _ in 0..=16 {
                 let Some(members) = self.groups.get(&tag) else {
-                    return Ok(self.names.get(&tag).cloned());
+                    return Ok(self.names.contains_key(&tag).then_some((tag, test_url)));
                 };
                 let mut response = client
                     .get(format!(
@@ -141,6 +193,9 @@ impl SelectionReader {
                 // current exit. Do not present its group name as a node.
                 if value["type"] == "LoadBalance" {
                     return Ok(None);
+                }
+                if let Some(url) = value["testUrl"].as_str().filter(|url| !url.is_empty()) {
+                    test_url = Some(url.to_owned());
                 }
                 let now = value["now"].as_str().ok_or("PROXY_STATUS_FAILED")?;
                 if now.is_empty() {
@@ -257,7 +312,7 @@ pub async fn engine_ready() -> Result<bool, String> {
 }
 
 /// Filesystem lookup must never run on an async runtime thread or under a runtime lock.
-async fn engine_path_async() -> Result<PathBuf, String> {
+pub(crate) async fn engine_path_async() -> Result<PathBuf, String> {
     tokio::time::timeout(
         Duration::from_secs(3),
         tokio::task::spawn_blocking(engine_path),
@@ -268,9 +323,7 @@ async fn engine_path_async() -> Result<PathBuf, String> {
 }
 
 fn engine_path() -> Result<PathBuf, String> {
-    if let Some(path) = super::codex_proxy_engine_install::managed_path()
-        .map_err(|_| "PROXY_ENGINE_START_FAILED")?
-    {
+    if let Some(path) = super::codex_proxy_engine_install::managed_path()? {
         return Ok(path);
     }
     let name = if cfg!(windows) {
@@ -442,7 +495,11 @@ fn configuration(
     }))
 }
 
-async fn start_resource(input: &str, desktop: bool) -> Result<NodeTunnel, String> {
+async fn start_resource(
+    input: &str,
+    desktop: bool,
+    unified_delay: bool,
+) -> Result<NodeTunnel, String> {
     let outbounds = super::codex_proxy_catalog_binding::outbounds(input)?;
     let names = super::codex_proxy_catalog_binding::names(input)?;
     let binary = engine_path_async().await?;
@@ -452,24 +509,36 @@ async fn start_resource(input: &str, desktop: bool) -> Result<NodeTunnel, String
         desktop,
         Some(names),
         super::codex_proxy_catalog_binding::decode(input)?.network,
+        unified_delay,
     )
     .await
 }
 
 pub async fn start(input: &str) -> Result<NodeTunnel, String> {
     if input.starts_with(super::codex_proxy_catalog_binding::PREFIX) {
-        return start_resource(input, false).await;
+        return start_resource(input, false, false).await;
     }
     let outbound = crate::modules::codex_proxy_node_parser::parse_node_link(input)?;
     let binary = engine_path_async().await?;
     start_with_binary(&binary, outbound).await
 }
 
+/// A latency check gets its own authenticated controller and process. Unified
+/// delay affects only this isolated probe, never an account's running tunnel.
+pub async fn start_latency(input: &str) -> Result<NodeTunnel, String> {
+    if input.starts_with(super::codex_proxy_catalog_binding::PREFIX) {
+        return start_resource(input, false, true).await;
+    }
+    let outbound = crate::modules::codex_proxy_node_parser::parse_node_link(input)?;
+    let binary = engine_path_async().await?;
+    start_with_binary_options(&binary, outbound, false, None, Default::default(), true).await
+}
+
 /// Desktop Chromium cannot authenticate a SOCKS proxy from command-line flags.
 /// This explicitly requested listener is loopback-only, but not a local-user ACL.
 pub async fn start_desktop(input: &str) -> Result<NodeTunnel, String> {
     if input.starts_with(super::codex_proxy_catalog_binding::PREFIX) {
-        return start_resource(input, true).await;
+        return start_resource(input, true, false).await;
     }
     let outbound = desktop_outbound(input)?;
     let binary = engine_path_async().await?;
@@ -480,7 +549,7 @@ pub async fn start_desktop(input: &str) -> Result<NodeTunnel, String> {
 /// proxy credentials. Unlike Chromium, it can use the random local SOCKS auth.
 pub async fn start_sidecar(input: &str) -> Result<NodeTunnel, String> {
     if input.starts_with(super::codex_proxy_catalog_binding::PREFIX) {
-        return start_resource(input, false).await;
+        return start_resource(input, false, false).await;
     }
     let outbound = if direct_scheme(input) {
         desktop_outbound(input)?
@@ -548,7 +617,7 @@ async fn start_with_binary_named(
     desktop: bool,
     names: Option<BTreeMap<String, String>>,
 ) -> Result<NodeTunnel, String> {
-    start_with_binary_options(binary, outbound, desktop, names, Default::default()).await
+    start_with_binary_options(binary, outbound, desktop, names, Default::default(), false).await
 }
 async fn start_with_binary_options(
     binary: &Path,
@@ -556,6 +625,7 @@ async fn start_with_binary_options(
     desktop: bool,
     names: Option<BTreeMap<String, String>>,
     network: super::codex_proxy_network::NetworkOptions,
+    unified_delay: bool,
 ) -> Result<NodeTunnel, String> {
     network.validate()?;
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
@@ -572,13 +642,19 @@ async fn start_with_binary_options(
     .map_err(|_| "PROXY_ENGINE_TIMEOUT")?
     .map_err(|_| "PROXY_ENGINE_START_FAILED")?
     .map_err(|_| "PROXY_ENGINE_START_FAILED")?;
-    super::codex_proxy_engine_install::verify_managed(binary)
-        .await
-        .map_err(|_| "PROXY_ENGINE_START_FAILED")?;
+    super::codex_proxy_engine_install::verify_managed(binary).await?;
     verify_version(binary).await?;
     tokio::time::timeout(
         START_TIMEOUT,
-        start_inner(binary, outbound, desktop, engine_lease, names, network),
+        start_inner(
+            binary,
+            outbound,
+            desktop,
+            engine_lease,
+            names,
+            network,
+            unified_delay,
+        ),
     )
     .await
     .map_err(|_| "PROXY_ENGINE_TIMEOUT".to_string())?
@@ -591,6 +667,7 @@ async fn start_inner(
     engine_lease: Option<std::fs::File>,
     names: Option<BTreeMap<String, String>>,
     network: super::codex_proxy_network::NetworkOptions,
+    unified_delay: bool,
 ) -> Result<NodeTunnel, String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -603,6 +680,9 @@ async fn start_inner(
     let password = uuid::Uuid::new_v4().simple().to_string();
     let mut config = configuration(outbound, port, &username, &password)?;
     network.apply(&mut config)?;
+    if unified_delay {
+        config["unified-delay"] = json!(true);
+    }
     if desktop {
         config["authentication"] = json!([]);
     }
@@ -748,6 +828,50 @@ async fn start_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selected_latency_keeps_the_latest_leaf_check_and_never_invents_zero() {
+        let history = json!({"alive":true,"history":[
+            {"time":"2026-09-25T10:00:00Z","delay":14},
+            {"time":"2026-09-25T10:01:00Z","delay":216}
+        ]});
+        let value = selection_history("US".into(), &history);
+        assert_eq!(value.delay_ms, Some(216));
+        assert_eq!(value.checked_at, Some(chrono::DateTime::parse_from_rfc3339("2026-09-25T10:01:00Z").unwrap().timestamp_millis()));
+        let failed = json!({"alive":false,"history":[{"time":"2026-09-25T10:01:00Z","delay":216}]});
+        assert_eq!(selection_history("US".into(), &failed).delay_ms, None);
+        for value in [Value::Null, json!({"history":[]}), json!({"history":[{"delay":216}]}), json!({"history":[{"time":"invalid","delay":216}]}), json!({"history":[{"time":"2026-09-25T10:01:00Z","delay":0}]})] {
+            assert_eq!(selection_history("US".into(), &value).delay_ms, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn selection_info_reads_the_selected_leaf_history_without_exposing_credentials() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for (path, body) in [
+                ("account-node", json!({"type":"URLTest","now":"leaf","testUrl":"https://check.invalid"})),
+                ("leaf", json!({"alive":true,"history":[{"time":"2026-09-25T10:01:00Z","delay":999}],"extra":{"https://check.invalid":{"alive":true,"history":[{"time":"2026-09-25T10:01:00Z","delay":216}]}},"password":"MUST_NOT_LEAK"})),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                while !bytes.ends_with(b"\r\n\r\n") { bytes.push(socket.read_u8().await.unwrap()); assert!(bytes.len()<8192); }
+                let request = String::from_utf8(bytes).unwrap().to_lowercase();
+                assert!(request.starts_with(&format!("get /proxies/{path} ")));
+                assert!(request.contains("authorization: bearer test-secret"));
+                let body = body.to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
+            }
+        });
+        let reader = SelectionReader { endpoint, secret:"test-secret".into(),
+            names:BTreeMap::from([("leaf".into(),"US".into())]),
+            groups:BTreeMap::from([("account-node".into(),vec!["leaf".into()])]) };
+        let info = reader.selected_info().await.unwrap().unwrap();
+        assert_eq!(info.name,"US"); assert_eq!(info.delay_ms,Some(216));
+        assert!(!serde_json::to_string(&info).unwrap().contains("MUST_NOT_LEAK"));
+        server.await.unwrap();
+    }
+
     #[test]
     fn version_requires_mihomo_identity_and_exact_release() {
         assert!(version_matches(
@@ -1390,7 +1514,7 @@ mod tests {
             );
             let started = std::time::Instant::now();
             let tunnel =
-                start_with_binary_options(&binary, out, false, None, network.clone()).await;
+                start_with_binary_options(&binary, out, false, None, network.clone(), false).await;
             let tunnel = match tunnel {
                 Ok(t) => t,
                 Err(e) => {
@@ -1444,6 +1568,8 @@ mod tests {
 
     #[test]
     fn engine_lookup_does_not_search_path() {
+        let _env = super::super::test_support::env_lock()
+            .lock().unwrap_or_else(|error| error.into_inner());
         let missing = engine_path();
         if missing.is_err() {
             assert_eq!(missing.unwrap_err(), "PROXY_ENGINE_MISSING");

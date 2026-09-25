@@ -1,5 +1,9 @@
-export interface LatencyValue { latencyMs: number; httpMs?: number | null; httpError?: string | null; httpsMs?: number | null; httpsError?: string | null; checkedAt: number }
+export interface LatencyValue { latencyMs: number; checkedAt: number }
 export type LatencyState = { status: 'queued' | 'running' | 'cancelled' } | { status: 'success'; value: LatencyValue } | { status: 'error'; error: unknown };
+export const LATENCY_FRESH_MS = 60_000;
+export function latencyFresh(result: LatencyState | undefined, now = Date.now()): boolean {
+  return result?.status === 'success' && now >= result.value.checkedAt && now - result.value.checkedAt < LATENCY_FRESH_MS;
+}
 /** Three workers, explicit cancellation, no selection changes and no retries. */
 export function startLatencyBatch(ids: string[], deps: {
   id: () => string;

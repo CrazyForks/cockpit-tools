@@ -42,3 +42,11 @@ test('one failed node does not abort other group members', async () => {
   });
   await batch.done; assert.equal(states.get('failed')?.status, 'error'); assert.equal(states.get('good')?.status, 'success');
 });
+
+test('latency freshness rejects expired and future timestamps', async () => {
+  const { latencyFresh } = await import('./codexProxyLatency');
+  assert.equal(latencyFresh({ status: 'success', value: { latencyMs: 10, checkedAt: 1000 } }, 2000), true);
+  assert.equal(latencyFresh({ status: 'success', value: { latencyMs: 10, checkedAt: 1000 } }, 61000), false);
+  assert.equal(latencyFresh({ status: 'success', value: { latencyMs: 10, checkedAt: 3000 } }, 2000), false);
+  assert.equal(latencyFresh({ status: 'running' }, 2000), false);
+});

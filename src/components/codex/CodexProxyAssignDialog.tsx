@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { preflightCodexProxyEngine } from '../../services/codexProxyEngineService';
 import { Check, CheckSquare, RefreshCw, Search, ShieldCheck, Square, Users, X } from 'lucide-react';
 import type { ProxyCatalog, ProxyCatalogSelections } from '../../services/codexProxyCatalogService';
 import { bindProxyCatalog, catalogErrorKey } from '../../services/codexProxyCatalogService';
@@ -98,6 +99,8 @@ export function CodexProxyAssignDialog({ choice, onClose }: { choice: ProxyAssig
     if (running.current || previewTask.current || previewLoading || !item?.supported || (scope === 'unified' ? !preview || unifiedSaved : !targets.length)) return;
     running.current = true; cancelled.current = false; setBusy(true); setError(''); setResults([]);
     try {
+      await preflightCodexProxyEngine();
+      if (!mounted.current || cancelled.current) return;
       if (scope === 'unified') {
         const next = await applyCodexUnifiedProxy(choice.sourceId, choice.itemId, choice.selections, choice.groupId || undefined);
         acceptUnified(next);

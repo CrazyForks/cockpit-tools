@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import * as enginePrerequisite from './codexProxyEnginePrerequisite';
 import type { ProxyCatalogNode, ProxyCatalogGroup, ProxyCatalogSource } from '../services/codexProxyCatalogService';
 import {
   strategyCandidates, filterStrategyCandidates, isPossibleProxyNotice, strategyEditorMembers, strategyErrorKey, strategyKindKey, strategyMemberViews, strategyNameTaken, strategyNoticeKey,
@@ -20,7 +21,7 @@ function harness(invoke: (command: string, args?: unknown) => Promise<unknown>) 
   let timerId = 0;
   vm.runInNewContext(compiled, {
     exports,
-    require: () => ({ invoke }),
+    require: (name: string) => name.endsWith('codexProxyEnginePrerequisite') ? enginePrerequisite : ({ invoke }),
     setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: (id: number) => timers.delete(id),
   });

@@ -9,6 +9,10 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use url::Url;
 
+#[path = "codex_proxy_subscription_diagnostics.rs"]
+mod diagnostics;
+pub(super) use diagnostics::{group_issues, reachable_nodes, GroupIssue};
+
 const INVALID: &str = "SUBSCRIPTION_INVALID";
 const UNSUPPORTED: &str = "PROXY_UNSUPPORTED_OPTION";
 const MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -399,6 +403,48 @@ fn clash_node(m: &Map<String, Value>) -> Result<Value> {
     Ok(json!({"type":"mihomo", "proxy":proxy}))
 }
 
+/// Recheck retained definitions against current capabilities without changing
+/// user permissions. A missing rejected definition requires an explicit refresh.
+pub(super) fn revalidate_retained_nodes(catalog: &mut ParsedCatalog) {
+    for node in &mut catalog.nodes {
+        let Some(outbound) = node.outbound.as_ref() else {
+            continue;
+        };
+        let approved = node.error.is_none();
+        let result = if outbound["type"] == "mihomo" {
+            outbound["proxy"]
+                .as_object()
+                .ok_or_else(|| INVALID.to_owned())
+                .and_then(clash_node)
+        } else {
+            super::codex_proxy_catalog_binding::runtime_parts(outbound.clone()).and_then(
+                |(nodes, groups)| {
+                    if nodes.len() != 1 || !groups.is_empty() {
+                        Err(UNSUPPORTED.into())
+                    } else {
+                        Ok(outbound.clone())
+                    }
+                },
+            )
+        };
+        match result {
+            Ok(current) => {
+                node.error = (!approved
+                    && super::codex_proxy_catalog_binding::is_insecure(&current))
+                .then(|| "PROXY_TLS_INSECURE".into());
+                if current["type"] == "mihomo" {
+                    node.protocol = current["proxy"]["type"]
+                        .as_str()
+                        .unwrap_or("unsupported")
+                        .to_owned();
+                }
+                node.outbound = Some(current);
+            }
+            Err(error) => node.error = Some(safe_node_error(&error)),
+        }
+    }
+}
+
 fn clash_group(value: &Value, node_names: &[String], has_providers: bool) -> Result<ParsedGroup> {
     let m = value.as_object().ok_or(INVALID)?;
     let group_name = name(text(m, "name")?)?;
@@ -501,7 +547,11 @@ pub(super) fn validate(catalog: &mut ParsedCatalog) -> Result<()> {
     // Availability is derived from the current capabilities and permissions.
     // Recompute it for persisted catalogs; keep actual parse/option failures.
     for group in &mut catalog.groups {
-        if group.error.as_deref() == Some("SUBSCRIPTION_GROUP_UNAVAILABLE") {
+        if group
+            .error
+            .as_deref()
+            .is_some_and(diagnostics::derived_group_error)
+        {
             group.error = None;
         }
         if super::codex_proxy_catalog_binding::is_builtin_name(&group.name) {
@@ -567,13 +617,34 @@ pub(super) fn validate(catalog: &mut ParsedCatalog) -> Result<()> {
             break;
         }
     }
+    let issues = group_issues(catalog);
     let invalid = available
         .iter()
         .enumerate()
         .filter_map(|(i, valid)| (!valid).then_some(i));
     for i in invalid {
         if catalog.groups[i].error.is_none() {
-            catalog.groups[i].error = Some("SUBSCRIPTION_GROUP_UNAVAILABLE".into());
+            let reasons = &issues[i];
+            let error = if reasons
+                .iter()
+                .any(|issue| issue.error == "SUBSCRIPTION_GROUP_CYCLE")
+            {
+                "SUBSCRIPTION_GROUP_CYCLE"
+            } else if reasons
+                .iter()
+                .any(|issue| issue.error == "SUBSCRIPTION_GROUP_MEMBER_MISSING")
+            {
+                "SUBSCRIPTION_GROUP_MEMBER_MISSING"
+            } else if !reasons.is_empty()
+                && reasons
+                    .iter()
+                    .all(|issue| issue.error == "PROXY_TLS_INSECURE")
+            {
+                "PROXY_TLS_INSECURE"
+            } else {
+                "SUBSCRIPTION_GROUP_MEMBER_UNSUPPORTED"
+            };
+            catalog.groups[i].error = Some(error.into());
         }
     }
     Ok(())

@@ -23,12 +23,14 @@ export function loadHookModule(file: URL, imports: Record<string, unknown>, glob
       }];
     },
     useRef(initial: unknown) { const index = cursor++; return values[index] ??= { current: initial }; },
+    useId() { const index = cursor++; return values[index] ??= `hook-id-${index}`; },
     useEffect(effect: () => void | (() => void), deps?: unknown[]) {
       const index = cursor++;
       if (same(dependencies[index], deps)) return;
       dependencies[index] = deps;
       effects.push(() => { cleanups[index]?.(); cleanups[index] = effect() || undefined; });
     },
+    useLayoutEffect(effect: () => void | (() => void), deps?: unknown[]) { hooks.useEffect(effect, deps); },
     useMemo(factory: () => unknown, deps?: unknown[]) {
       const index = cursor++;
       if (!same(dependencies[index], deps)) { values[index] = factory(); dependencies[index] = deps; }
@@ -38,11 +40,13 @@ export function loadHookModule(file: URL, imports: Record<string, unknown>, glob
   };
   const exports: Record<string, any> = {};
   const require = createRequire(file);
+  // Context creation is not a hook; retain React's provider shape for context-owner tests.
+  const createContext = require('react').createContext;
   const compiled = ts.transpileModule(readFileSync(file, 'utf8'), { compilerOptions: {
     module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX,
   } }).outputText;
   vm.runInNewContext(compiled, { exports, crypto: globalThis.crypto, ...globals, require(name: string) {
-    if (name === 'react') return hooks;
+    if (name === 'react') return { ...hooks, createContext };
     if (name in imports) return imports[name];
     if (name.endsWith('.css')) return {};
     return require(name);

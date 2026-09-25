@@ -7,12 +7,12 @@ import { CodexProxyRuntimeDetails, CodexProxyRuntimePort } from './CodexProxyRun
 const readStatus = singleFlightRead(getCodexProxyRuntimeStatus);
 
 /** This is process liveness, not connectivity or a substitute for an exit test. */
-export function CodexProxyRuntimeStatusPanel({ accountId, revision }: { accountId: string; revision: unknown }) {
-  const { t } = useTranslation();
+export function useCodexProxyRuntimeStatus(accountId: string, revision: unknown, enabled = true) {
   const [result, setResult] = useState({ accountId, revision, status: null as CodexProxyRuntimeStatus | null, failed: false });
   const { status, failed } = result.accountId === accountId && Object.is(result.revision, revision)
     ? result : { status: null, failed: false };
   useEffect(() => {
+    if (!enabled) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     setResult({ accountId, revision, status: null, failed: false });
@@ -29,7 +29,13 @@ export function CodexProxyRuntimeStatusPanel({ accountId, revision }: { accountI
     };
     void refresh();
     return () => { disposed = true; if (timer) clearTimeout(timer); };
-  }, [accountId, revision]);
+  }, [accountId, revision, enabled]);
+  return { status: enabled ? status : null, failed: enabled && failed };
+}
+
+export function CodexProxyRuntimeStatusPanel({ accountId, revision }: { accountId: string; revision: unknown }) {
+  const { t } = useTranslation();
+  const { status, failed } = useCodexProxyRuntimeStatus(accountId, revision);
   return <section className="codex-proxy-runtime" aria-label={t('codex.proxy.runtimeTitle')}>
     <strong>{t('codex.proxy.runtimeTitle')}</strong>
     {status ? <div className="codex-proxy-runtime-rows">

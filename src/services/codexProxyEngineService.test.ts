@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import * as enginePrerequisite from '../utils/codexProxyEnginePrerequisite';
 
 const compiled = ts.transpileModule(readFileSync(new URL('./codexProxyEngineService.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -11,7 +12,7 @@ function harness(invoke: (command: string, args?: unknown) => Promise<unknown>) 
   const exports: Record<string, any> = {};
   const timers = new Map<number, () => void>();
   let timerId = 0;
-  vm.runInNewContext(compiled, { exports, require: () => ({ invoke }),
+  vm.runInNewContext(compiled, { exports, require: (name: string) => name.endsWith('codexProxyEnginePrerequisite') ? enginePrerequisite : ({ invoke }),
     setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: (id: number) => timers.delete(id),
   });

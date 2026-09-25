@@ -1,16 +1,18 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { CodexAccount } from '../types/codex';
 import type { CodexProxyProbeResult } from './codexAccountProxyService';
+import { proxyEnginePrerequisiteKey, withProxyEnginePrerequisite } from '../utils/codexProxyEnginePrerequisite';
 
-export interface ProxyCatalogNode { id: string; name: string; protocol: string; supported: boolean; error: string | null; insecure?: boolean; server?: string | null; port?: number | null }
-export interface ProxyCatalogGroup { id: string; name: string; kind: string; members: string[]; supported: boolean; error: string | null }
+export interface ProxyCatalogNode { id: string; name: string; protocol: string; supported: boolean; error: string | null; insecure?: boolean; udp?: boolean | null; server?: string | null; port?: number | null }
+export interface ProxyCatalogIssue { name: string; error: string }
+export interface ProxyCatalogGroup { id: string; name: string; kind: string; members: string[]; supported: boolean; error: string | null; issues?: ProxyCatalogIssue[]; insecureNodeIds?: string[]; testUrl?: string | null }
 /** A saved default is draft-only prefill: stable ids plus the manual member choices. */
 export interface ProxyCatalogDefault { itemId: string; groupId: string | null; selections: ProxyCatalogSelections }
 /** Strategy sources only: the original source and node each copied member came from. */
 export interface ProxyCatalogStrategyMember { sourceId: string; itemId: string; name: string; sourceName: string }
 export interface ProxyCatalogSource {
   id: string; name: string; kind: 'subscription' | 'manual' | 'strategy'; updatedAt: number; lastAttemptAt: number | null;
-  revision: string; autoUpdate: boolean; error: string | null; nodes: ProxyCatalogNode[]; groups: ProxyCatalogGroup[];
+  revision: string; autoUpdate: boolean; error: string | null; nodes: ProxyCatalogNode[]; groups: ProxyCatalogGroup[]; needsRefresh?: boolean;
   default: ProxyCatalogDefault | null; defaultInvalidated: boolean;
   /** Subscription sources only: usage from the `subscription-userinfo` response header, never the raw header. */
   usage?: { upload: number; download: number; total: number; expireAt: number | null; at: number } | null;
@@ -38,7 +40,12 @@ function timed<T>(pending: Promise<T>, command: string, args?: Record<string, un
     pending.then(resolve, reject).finally(() => clearTimeout(timer));
   });
 }
-function call<T>(command: string, args?: Record<string, unknown>): Promise<T> { return timed(invoke<T>(command, args), command, args); }
+function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const request = timed(invoke<T>(command, args), command, args);
+  // Reads, cancellation and removal remain available without an engine.
+  const guarded = ['codex_proxy_catalog_import', 'codex_proxy_catalog_bind', 'codex_proxy_catalog_probe', 'codex_proxy_catalog_latency'];
+  return guarded.includes(command) ? withProxyEnginePrerequisite(request) : request;
+}
 let listing: Promise<ProxyCatalog> | null = null;
 export function getProxyCatalog(): Promise<ProxyCatalog> {
   if (!listing) {
@@ -111,6 +118,9 @@ export function catalogUnsupportedKey(item?: { error?: string | null; kind?: str
     SUBSCRIPTION_GROUP_TIMEOUT: 'reasonGroupTimeout',
     SUBSCRIPTION_PROVIDER_UNSUPPORTED: 'reasonProvider',
     SUBSCRIPTION_GROUP_UNAVAILABLE: 'reasonMembers',
+    SUBSCRIPTION_GROUP_CYCLE: 'reasonCycle',
+    SUBSCRIPTION_GROUP_MEMBER_MISSING: 'reasonMissing',
+    SUBSCRIPTION_GROUP_MEMBER_UNSUPPORTED: 'reasonMemberUnsupported',
     PROXY_UNSUPPORTED_OPTION: 'reasonOptions',
     PROXY_TLS_INSECURE: 'reasonTlsInsecure',
     PROXY_TRANSPORT_UNSUPPORTED: 'reasonTransport',
@@ -124,6 +134,8 @@ export function catalogUnsupportedKey(item?: { error?: string | null; kind?: str
 }
 /** Never show an untrusted backend message or a subscription URL in an error. */
 export function catalogErrorKey(error: unknown): string {
+  const prerequisite = proxyEnginePrerequisiteKey(error);
+  if (prerequisite) return prerequisite;
   const code = String(error).replace(/^Error:\s*/, '');
   if (code === 'UNIFIED_PROXY_STORAGE' || code === 'UNIFIED_PROXY_LOADING') return 'codex.proxy.unified.errorRead';
   if (code === 'UNIFIED_PROXY_TIMEOUT') return 'codex.proxy.unified.errorTimeout';
@@ -140,6 +152,8 @@ export function catalogErrorKey(error: unknown): string {
     SUBSCRIPTION_UNSUPPORTED: 'unsupported', SUBSCRIPTION_INVALID: 'invalidInput', SUBSCRIPTION_EMPTY: 'invalidInput',
     SUBSCRIPTION_TOO_LARGE: 'tooLarge', SUBSCRIPTION_DUPLICATE_NAME: 'invalidInput', SUBSCRIPTION_GROUP_UNAVAILABLE: 'unsupported',
     SUBSCRIPTION_GROUP_STRATEGY: 'reasonStrategy', SUBSCRIPTION_GROUP_OPTIONS: 'reasonOptions',
+    SUBSCRIPTION_GROUP_CYCLE: 'reasonCycle', SUBSCRIPTION_GROUP_MEMBER_MISSING: 'reasonMissing',
+    SUBSCRIPTION_GROUP_MEMBER_UNSUPPORTED: 'reasonMemberUnsupported',
     SUBSCRIPTION_GROUP_TIMEOUT: 'reasonGroupTimeout',
     SUBSCRIPTION_PROVIDER_UNSUPPORTED: 'reasonProvider', PROXY_TLS_INSECURE: 'reasonTlsInsecure',
     PROXY_TRANSPORT_UNSUPPORTED: 'reasonTransport', PROXY_ECH_UNSUPPORTED: 'reasonEch',
@@ -154,20 +168,41 @@ export function catalogErrorKey(error: unknown): string {
 export interface ProxyImportOptions { protocol: string; format: string; skipInvalid: boolean; skipDuplicates: boolean; fallbackName: string }
 export interface ProxyImportRow { line: number; name: string | null; protocol: string | null; server: string | null; port: number | null; authenticated: boolean; duplicate: boolean; error: string | null }
 export interface ProxyImportPreview { structured: boolean; rows: ProxyImportRow[]; valid: number; invalid: number; duplicates: number }
-export interface ProxyLatency { latencyMs: number; httpMs?: number | null; httpError?: string | null; httpsMs?: number | null; httpsError?: string | null; checkedAt: number }
+export interface ProxyLatency { latencyMs: number; checkedAt: number }
 export function previewProxyImport(input: string, options: ProxyImportOptions): Promise<ProxyImportPreview> {
   return call('codex_proxy_catalog_preview', { input, options });
 }
 export function renameProxySource(sourceId: string, name: string): Promise<ProxyCatalog> {
   return call('codex_proxy_catalog_rename', { sourceId, name });
 }
-export function measureProxyLatency(requestId: string, sourceId: string, nodeId: string, revision: string): Promise<ProxyLatency> {
-  return call('codex_proxy_catalog_latency', { requestId, sourceId, nodeId, revision });
+export function measureProxyLatency(requestId: string, sourceId: string, nodeId: string, revision: string, groupId?: string): Promise<ProxyLatency> {
+  return call('codex_proxy_catalog_latency', { requestId, sourceId, nodeId, revision, ...(groupId ? { groupId } : {}) });
 }
-/** Only immediate leaf members belong to a group test. Child groups remain separate choices. */
+/** Browsing keeps immediate leaf members and child groups as separate choices. */
 export function catalogGroupNodes(source: ProxyCatalogSource, groupId: string, includeUnsupported = false): string[] {
   const group = source.groups.find((g) => g.id === groupId);
   const nodes = new Map(source.nodes.map((node) => [node.name, node]));
   return [...new Set((group?.members ?? []).flatMap((name) => { const node = nodes.get(name); return node && (node.supported || includeUnsupported) ? [node.id] : []; }))];
 }
+/** Test only the clicked item and its descendants, never its parent or other saved choices. */
+export function catalogLatencyCandidates(source: ProxyCatalogSource, itemId: string): string[] {
+  const ids = new Set<string>();
+  const visited = new Set<string>();
+  const node = (id: string) => { const value = source.nodes.find((entry) => entry.id === id); if (value?.supported) ids.add(value.id); };
+  node(itemId);
+  const visit = (id: string) => {
+    if (visited.has(id)) return;
+    visited.add(id);
+    const group = source.groups.find((entry) => entry.id === id);
+    for (const name of group?.members ?? []) {
+      const leaf = source.nodes.find((entry) => entry.name === name);
+      if (leaf) node(leaf.id);
+      const child = source.groups.find((entry) => entry.name === name);
+      if (child) visit(child.id);
+    }
+  };
+  visit(itemId);
+  return [...ids];
+}
 export function setProxyNodeInsecure(sourceId: string, nodeId: string, revision: string, enabled: boolean): Promise<ProxyCatalog> { return call('codex_proxy_catalog_insecure', { sourceId, nodeId, revision, enabled }); }
+export function setProxyGroupInsecure(sourceId: string, groupId: string, revision: string, enabled: boolean): Promise<ProxyCatalog> { return call('codex_proxy_catalog_group_insecure', { sourceId, groupId, revision, enabled }); }

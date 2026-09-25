@@ -1,12 +1,13 @@
 import type { CodexAccount } from '../types/codex';
 import type { ProxyCatalog, ProxyCatalogSource, ProxyCatalogSelections } from '../services/codexProxyCatalogService';
 import { isCatalogBlockingMember } from '../services/codexProxyCatalogService';
+import { proxySourceInspectable } from './codexProxyPickerModel';
 
 /** Restore identity only. Missing resources must never silently select a replacement. */
 export function restoreProxySelection(catalog: ProxyCatalog, saved: CodexAccount['egress_proxy']) {
   const source = saved?.sourceId
     ? catalog.sources.find((entry) => entry.id === saved.sourceId)
-    : catalog.sources.find((entry) => entry.nodes.some((node) => node.supported) || entry.groups.some((group) => group.supported));
+    : catalog.sources.find(proxySourceInspectable);
   const itemId = source && saved?.sourceId === source.id
     && [...source.nodes, ...source.groups].some((entry) => entry.id === saved.itemId) ? saved.itemId! : '';
   return { sourceId: source?.id ?? '', itemId, groupId: source ? proxySelectionGroup(source, itemId, saved?.groupId) : '' };

@@ -458,7 +458,7 @@ Every bit of support helps sustain open-source development. Thank you!
 
 ## Acknowledgments
 
-- Codex proxy workspace navigation, subscription cards, group/node selection and subscription naming reference the interface and subscription response-header handling in [Clash Verge Rev](https://github.com/clash-verge-rev/clash-verge-rev). This is design and implementation inspiration, not a runtime dependency or official partnership.
+- Codex proxy workspace navigation, subscription cards, current-node display, group/node menus, latency badges and sorting, native latency API calls, quick switching and subscription naming reference the interface and implementation in [Clash Verge Rev](https://github.com/clash-verge-rev/clash-verge-rev). This is design and implementation inspiration, not a runtime dependency or official partnership.
 - The short first-time proxy binding flow and current-node display for Codex accounts reference [Hiddify](https://github.com/hiddify/hiddify-app). This is interaction inspiration; its code and services are not integrated.
 - Codex proxy node filtering, sorting, latency tests and narrow-window layouts reference [FlClash](https://github.com/chen08209/FlClash). This is interaction inspiration; its code and services are not integrated.
 - Codex account proxies use [Mihomo](https://github.com/MetaCubeX/mihomo) as a separate process for supported Clash nodes and groups. Node options, nested groups and built-in blocking semantics, local connection-log APIs, health checks and failover design reference its official source and documentation. Users explicitly download or import the engine; the host installer does not bundle it. This does not imply an official partnership.

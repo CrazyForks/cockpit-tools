@@ -37,6 +37,27 @@ pub async fn codex_proxy_engine_status() -> Result<EngineInstallStatus, String> 
     installer::status().await
 }
 
+/// Explicit prerequisite check; does not install or contact a proxy server.
+#[tauri::command]
+pub async fn codex_proxy_engine_preflight() -> Result<(), String> {
+    crate::modules::codex_proxy_engine_preflight::require().await
+}
+
+/// Check the actual saved route before a UI restart stops its current client.
+#[tauri::command]
+pub async fn codex_proxy_instance_preflight(instance_id: String) -> Result<(), String> {
+    tokio::time::timeout(std::time::Duration::from_secs(15), async move {
+        let target = tokio::task::spawn_blocking(move || {
+            super::codex_instance::resolve_codex_instance_start_target(&instance_id)
+        })
+        .await
+        .map_err(|_| "PROXY_RUNTIME_FAILED")??;
+        target.preflight_desktop_proxy().await
+    })
+    .await
+    .map_err(|_| "PROXY_ENGINE_TIMEOUT".to_string())?
+}
+
 #[tauri::command]
 pub async fn codex_proxy_engine_install(
     archive_path: Option<String>,

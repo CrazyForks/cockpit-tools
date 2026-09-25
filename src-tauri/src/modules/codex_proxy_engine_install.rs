@@ -172,6 +172,19 @@ fn is_busy(phase: &str) -> bool {
     )
 }
 
+fn check_preflight_phase(phase: Option<&str>) -> Result<(), String> {
+    if phase.is_some_and(is_busy) {
+        return Err("ENGINE_INSTALL_BUSY".into());
+    }
+    Ok(())
+}
+
+/// Read only the in-memory installer phase; never scan disk or wait for its job.
+pub(crate) fn check_not_installing() -> Result<(), String> {
+    let job = JOB.lock().map_err(|_| "ENGINE_INSTALL_IO")?;
+    check_preflight_phase(job.as_ref().map(|job| job.status.phase.as_str()))
+}
+
 #[derive(Serialize, Deserialize)]
 struct Installed {
     directory: String,
@@ -245,6 +258,9 @@ pub(crate) fn managed_path() -> Result<Option<PathBuf>, String> {
 }
 pub(crate) async fn verify_managed(binary: &Path) -> Result<(), String> {
     let root = root()?;
+    verify_managed_in(root, binary).await
+}
+async fn verify_managed_in(root: PathBuf, binary: &Path) -> Result<(), String> {
     if !binary.starts_with(&root) {
         return Ok(());
     }
@@ -269,7 +285,8 @@ pub(crate) async fn verify_managed(binary: &Path) -> Result<(), String> {
                 job_id: None,
             };
             for (name, expected) in value.files {
-                if archive::file_sha256(&root.join(&value.directory).join(name), &control)?
+                if archive::file_sha256(&root.join(&value.directory).join(name), &control)
+                    .map_err(|error| if error == "ENGINE_INSTALL_TIMEOUT" { error } else { "ENGINE_INSTALL_VERIFY".into() })?
                     != expected
                 {
                     return Err("ENGINE_INSTALL_VERIFY".into());

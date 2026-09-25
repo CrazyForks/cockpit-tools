@@ -200,7 +200,7 @@ test('batch lifecycle resets StrictMode cleanup and releases busy state even whe
   const dialog = readFileSync(new URL('../components/codex/CodexProxyBatchBindDialog.tsx', import.meta.url), 'utf8');
   assert.match(dialog, /useEffect\(\(\) => \{\s*mounted.current = true;\s*cancelled.current = false;/);
   assert.match(dialog, /finally \{\s*running.current = false;\s*if \(mounted.current\) \{ setBusy\(false\); setProgress\(null\); \}/);
-  assert.match(dialog, /SingleSelectDropdown[^>]*disabled=\{busy \|\| testing\}/);
+  assert.match(dialog, /SingleSelectDropdown[^>]*disabled=\{busy \|\| testing \|\| catalogPending\}/);
   assert.match(dialog, /className="btn btn-primary" disabled=\{busy \|\| testing/);
 });
 

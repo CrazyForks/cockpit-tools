@@ -1,4 +1,15 @@
 use super::*;
+
+#[test]
+fn installer_active_phases_block_preflight_and_terminal_phases_allow_rechecking() {
+    for phase in ["downloading", "importing", "verifying", "extracting", "checking", "installing"] {
+        assert_eq!(check_preflight_phase(Some(phase)).unwrap_err(), "ENGINE_INSTALL_BUSY");
+    }
+    for phase in [None, Some("idle"), Some("completed"), Some("failed"), Some("cancelled")] {
+        assert!(check_preflight_phase(phase).is_ok());
+    }
+}
+
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
@@ -257,6 +268,27 @@ fn release(root: &Path) -> Installed {
     )
     .unwrap();
     installed
+}
+
+#[tokio::test]
+async fn readiness_hash_check_distinguishes_missing_intact_and_damaged_without_repairing_data() {
+    let temp = Temp::new();
+    assert!(load_installed(&temp.0).unwrap().is_none());
+    let installed = release(&temp.0);
+    let pointer = temp.0.join("active.json");
+    let record = serde_json::to_vec(&installed).unwrap();
+    fs::write(&pointer, &record).unwrap();
+    let binary = temp.0.join(&installed.directory).join(binary_name());
+    verify_managed_in(temp.0.clone(), &binary).await.unwrap();
+    fs::write(&binary, b"modified-binary").unwrap();
+    // Status is intentionally a metadata read; an explicit operation verifies content.
+    assert!(load_installed(&temp.0).unwrap().is_some());
+    assert_eq!(verify_managed_in(temp.0.clone(), &binary).await.unwrap_err(), "ENGINE_INSTALL_VERIFY");
+    assert_eq!(fs::read(&pointer).unwrap(), record);
+    assert_eq!(fs::read(&binary).unwrap(), b"modified-binary");
+    fs::remove_file(&binary).unwrap();
+    assert_eq!(load_installed(&temp.0).err().unwrap(), "ENGINE_INSTALL_VERIFY");
+    assert_eq!(fs::read(&pointer).unwrap(), record);
 }
 #[test]
 fn immutable_release_record_survives_active_switch_and_running_lease_prevents_cleanup() {

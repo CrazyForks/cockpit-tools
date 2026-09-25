@@ -20,6 +20,7 @@ export interface CodexProxyWorkspaceValue {
   catalogLoading: boolean;
   catalogError: string;
   reloadCatalog(): void;
+  acceptCatalog(catalog: ProxyCatalog): void;
   unified: CodexUnifiedProxyView | null;
   unifiedErrorKey: string;
   reloadUnified(): void;
@@ -46,6 +47,7 @@ export function CodexProxyWorkspaceProvider({ accounts, accountId, children }: P
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState('');
   const [catalogRevision, setCatalogRevision] = useState(0);
+  const catalogGeneration = useRef(0);
   const [unified, setUnified] = useState<CodexUnifiedProxyView | null>(null);
   const [unifiedErrorKey, setUnifiedErrorKey] = useState('');
   const [unifiedRevision, setUnifiedRevision] = useState(0);
@@ -69,15 +71,16 @@ export function CodexProxyWorkspaceProvider({ accounts, accountId, children }: P
 
   useEffect(() => {
     let live = true;
+    const generation = ++catalogGeneration.current;
     setCatalogLoading(true);
     void getProxyCatalog().then((next) => {
-      if (!live) return;
+      if (!live || generation !== catalogGeneration.current) return;
       setCatalog(next);
       setCatalogError('');
     }).catch((caught) => {
-      if (live) setCatalogError(translate.current(catalogErrorKey(caught)));
+      if (live && generation === catalogGeneration.current) setCatalogError(translate.current(catalogErrorKey(caught)));
     }).finally(() => {
-      if (live) setCatalogLoading(false);
+      if (live && generation === catalogGeneration.current) setCatalogLoading(false);
     });
     return () => { live = false; };
   }, [catalogRevision]);
@@ -111,6 +114,10 @@ export function CodexProxyWorkspaceProvider({ accounts, accountId, children }: P
     if (eligible.some((entry) => entry.id === id)) setSelectedId(id);
   }, [eligible]);
   const reloadCatalog = useCallback(() => setCatalogRevision((value) => value + 1), []);
+  const acceptCatalog = useCallback((next: ProxyCatalog) => {
+    catalogGeneration.current += 1;
+    setCatalog(next); setCatalogError(''); setCatalogLoading(false);
+  }, []);
   const reloadUnified = useCallback(() => setUnifiedRevision((value) => value + 1), []);
   const acceptUnified = useCallback((view: CodexUnifiedProxyView) => {
     // A completed write wins over an older background read.
@@ -128,6 +135,7 @@ export function CodexProxyWorkspaceProvider({ accounts, accountId, children }: P
     catalogLoading,
     catalogError,
     reloadCatalog,
+    acceptCatalog,
     unified,
     unifiedErrorKey,
     reloadUnified,
@@ -135,7 +143,7 @@ export function CodexProxyWorkspaceProvider({ accounts, accountId, children }: P
     traffic,
     section,
     goSection,
-  }), [accounts, accountId, selectedId, selectAccount, catalog, catalogLoading, catalogError, reloadCatalog, unified, unifiedErrorKey, reloadUnified, acceptUnified, traffic, section, goSection]);
+  }), [accounts, accountId, selectedId, selectAccount, catalog, catalogLoading, catalogError, reloadCatalog, acceptCatalog, unified, unifiedErrorKey, reloadUnified, acceptUnified, traffic, section, goSection]);
 
   return <CodexProxyWorkspaceContext.Provider value={value}>{children}</CodexProxyWorkspaceContext.Provider>;
 }

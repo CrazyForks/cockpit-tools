@@ -1,5 +1,8 @@
 use crate::modules::codex_proxy_catalog::{self as catalog, CatalogView};
 use std::collections::BTreeMap;
+#[cfg(test)]
+#[path = "codex_proxy_catalog_preflight_tests.rs"]
+mod preflight_tests;
 #[tauri::command]
 pub async fn codex_proxy_catalog_list() -> Result<CatalogView, String> {
     catalog::list().await
@@ -12,6 +15,7 @@ pub async fn codex_proxy_catalog_import(
     kind: String,
     options: Option<crate::modules::codex_proxy_manual_import::ImportOptions>,
 ) -> Result<CatalogView, String> {
+    crate::modules::codex_proxy_engine_preflight::require().await?;
     catalog::import(request_id, name, input, kind, options.unwrap_or_default()).await
 }
 
@@ -20,6 +24,7 @@ pub async fn codex_proxy_catalog_preview(
     input: String,
     options: crate::modules::codex_proxy_manual_import::ImportOptions,
 ) -> Result<crate::modules::codex_proxy_manual_import::ImportPreview, String> {
+    crate::modules::codex_proxy_engine_preflight::require().await?;
     catalog::preview(input, options).await
 }
 #[tauri::command]
@@ -37,14 +42,16 @@ pub async fn codex_proxy_catalog_latency(
     source_id: String,
     node_id: String,
     revision: String,
+    group_id: Option<String>,
 ) -> Result<crate::modules::codex_proxy_probe::LatencyResult, String> {
-    catalog::latency(request_id, source_id, node_id, revision).await
+    catalog::latency(request_id, source_id, node_id, revision, group_id).await
 }
 #[tauri::command]
 pub async fn codex_proxy_catalog_refresh(
     request_id: String,
     source_id: String,
 ) -> Result<CatalogView, String> {
+    crate::modules::codex_proxy_engine_preflight::require().await?;
     let view = catalog::refresh(request_id, source_id.clone()).await?;
     crate::modules::codex_unified_proxy::resync_source(&source_id, false).await;
     Ok(view)
@@ -72,8 +79,12 @@ static PENDING_REMOVAL_SYNC: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(BTreeMap::new()));
 
 fn remember_removal_sync(source_id: &str, accounts: Vec<String>) -> Result<Vec<String>, String> {
-    let mut pending = PENDING_REMOVAL_SYNC.lock().map_err(|_| "CATALOG_PARTIAL_UNBIND")?;
-    if accounts.is_empty() && !pending.contains_key(source_id) { return Ok(Vec::new()); }
+    let mut pending = PENDING_REMOVAL_SYNC
+        .lock()
+        .map_err(|_| "CATALOG_PARTIAL_UNBIND")?;
+    if accounts.is_empty() && !pending.contains_key(source_id) {
+        return Ok(Vec::new());
+    }
     let ids = pending.entry(source_id.to_owned()).or_default();
     ids.extend(accounts);
     Ok(ids.iter().cloned().collect())
@@ -83,7 +94,9 @@ fn finish_removal_sync(source_id: &str, account_id: &str) {
     if let Ok(mut pending) = PENDING_REMOVAL_SYNC.lock() {
         if let Some(ids) = pending.get_mut(source_id) {
             ids.remove(account_id);
-            if ids.is_empty() { pending.remove(source_id); }
+            if ids.is_empty() {
+                pending.remove(source_id);
+            }
         }
     }
 }
@@ -111,7 +124,10 @@ mod removal_retry_tests {
         let other = format!("other-{}", uuid::Uuid::new_v4());
         remember_removal_sync(&source, vec!["a".into()]).unwrap();
         remember_removal_sync(&other, vec!["a".into()]).unwrap();
-        assert_eq!(remember_removal_sync(&source, vec!["a".into(), "b".into()]).unwrap(), vec!["a", "b"]);
+        assert_eq!(
+            remember_removal_sync(&source, vec!["a".into(), "b".into()]).unwrap(),
+            vec!["a", "b"]
+        );
         finish_removal_sync(&source, "a");
         finish_removal_sync(&source, "b");
         assert_eq!(remember_removal_sync(&other, vec![]).unwrap(), vec!["a"]);
@@ -127,17 +143,29 @@ async fn remove_source(source_id: String) -> Result<CatalogView, String> {
         std::time::Duration::from_secs(10),
         tauri::async_runtime::spawn_blocking(move || {
             crate::modules::codex_account::list_accounts_for_proxy_removal().map(|accounts| {
-                let existing = accounts.iter().map(|account| account.id.clone()).collect::<std::collections::BTreeSet<_>>();
-                let matching = accounts.into_iter().filter(|account| {
-                    account.egress_proxy_url.as_deref().is_some_and(|raw| {
-                        crate::modules::codex_proxy_catalog_binding::belongs_to_source(raw, &matching_source)
+                let existing = accounts
+                    .iter()
+                    .map(|account| account.id.clone())
+                    .collect::<std::collections::BTreeSet<_>>();
+                let matching = accounts
+                    .into_iter()
+                    .filter(|account| {
+                        account.egress_proxy_url.as_deref().is_some_and(|raw| {
+                            crate::modules::codex_proxy_catalog_binding::belongs_to_source(
+                                raw,
+                                &matching_source,
+                            )
+                        })
                     })
-                }).map(|account| account.id).collect::<Vec<_>>();
+                    .map(|account| account.id)
+                    .collect::<Vec<_>>();
                 (matching, existing)
             })
         }),
-    ).await.map_err(|_| "CATALOG_TIMEOUT")?
-        .map_err(|_| "CATALOG_ACCOUNT_READ")??;
+    )
+    .await
+    .map_err(|_| "CATALOG_TIMEOUT")?
+    .map_err(|_| "CATALOG_ACCOUNT_READ")??;
     // Remember before unbinding: cancelled or failed work can be retried even
     // though the account no longer references this source.
     let pending = remember_removal_sync(&source_id, account_ids)?;
@@ -150,12 +178,16 @@ async fn remove_source(source_id: String) -> Result<CatalogView, String> {
             continue;
         }
         crate::modules::codex_proxy_runtime::clear_binding_if_source(
-            account_id.clone(), source_id.clone(),
-        ).await.map_err(|_| "CATALOG_PARTIAL_UNBIND")?;
+            account_id.clone(),
+            source_id.clone(),
+        )
+        .await
+        .map_err(|_| "CATALOG_PARTIAL_UNBIND")?;
         let lock = crate::modules::codex_account::codex_token_lock_for(&account_id);
-        let token_guard = tokio::time::timeout(
-            std::time::Duration::from_secs(10), lock.lock_owned(),
-        ).await.map_err(|_| "CATALOG_PARTIAL_UNBIND")?;
+        let token_guard =
+            tokio::time::timeout(std::time::Duration::from_secs(10), lock.lock_owned())
+                .await
+                .map_err(|_| "CATALOG_PARTIAL_UNBIND")?;
         let source = source_id.clone();
         let worker_guard = guard.clone();
         tokio::time::timeout(
@@ -177,11 +209,17 @@ async fn remove_source(source_id: String) -> Result<CatalogView, String> {
                 finish_removal_sync(&source, &account_id);
                 Ok::<(), &str>(())
             }),
-        ).await.map_err(|_| "CATALOG_PARTIAL_UNBIND")?
-            .map_err(|_| "CATALOG_PARTIAL_UNBIND")??;
+        )
+        .await
+        .map_err(|_| "CATALOG_PARTIAL_UNBIND")?
+        .map_err(|_| "CATALOG_PARTIAL_UNBIND")??;
     }
     let removed = catalog::remove(source_id.clone()).await.map_err(|error| {
-        if had_updates { "CATALOG_PARTIAL_UNBIND".into() } else { error }
+        if had_updates {
+            "CATALOG_PARTIAL_UNBIND".into()
+        } else {
+            error
+        }
     })?;
     crate::modules::codex_unified_proxy::resync_source(&source_id, true).await;
     Ok(removed)
@@ -195,15 +233,10 @@ pub async fn codex_proxy_strategy_save(
     members: Vec<catalog::StrategyMember>,
     options: Option<catalog::StrategyOptions>,
 ) -> Result<CatalogView, String> {
+    crate::modules::codex_proxy_engine_preflight::require().await?;
     let id = id.filter(|id| !id.trim().is_empty());
-    let view = catalog::save_strategy(
-        id.clone(),
-        name,
-        kind,
-        members,
-        options.unwrap_or_default(),
-    )
-    .await?;
+    let view = catalog::save_strategy(id.clone(), name, kind, members, options.unwrap_or_default())
+        .await?;
     if let Some(id) = id {
         // 统一代理引用同一策略时必须同步快照，否则账号仍走旧成员。
         crate::modules::codex_unified_proxy::resync_source(&id, false).await;
@@ -231,6 +264,10 @@ pub async fn codex_proxy_catalog_set_default(
     selections: BTreeMap<String, String>,
     group_id: Option<String>,
 ) -> Result<CatalogView, String> {
+    crate::modules::codex_proxy_engine_preflight::require().await?;
+    let _guard = catalog::SourceGuard::new(source_id.clone())?;
+    // set_default validates the current catalog and group membership locally.
+    // A failed public-IP service must not prevent saving this preference.
     catalog::set_default(source_id, item_id, selections, group_id).await
 }
 /// 清除来源默认项，并确认“默认项已失效”提示。
@@ -246,6 +283,7 @@ pub async fn codex_proxy_catalog_bind(
     selections: BTreeMap<String, String>,
     group_id: Option<String>,
 ) -> Result<crate::models::codex::CodexAccount, String> {
+    crate::modules::codex_proxy_engine_preflight::require().await?;
     let _guard = catalog::SourceGuard::new(source_id.clone())?;
     let snapshot = catalog::snapshot_with_group(source_id, item_id, selections, group_id).await?;
     // Same binding transaction and API-service synchronization as the existing account form.
@@ -258,6 +296,7 @@ pub async fn codex_proxy_catalog_probe(
     item_id: String,
     selections: BTreeMap<String, String>,
 ) -> Result<crate::modules::codex_proxy_probe::ProxyProbeResult, String> {
+    crate::modules::codex_proxy_engine_preflight::require().await?;
     catalog::probe(request_id, source_id, item_id, selections).await
 }
 
@@ -279,6 +318,18 @@ pub async fn codex_proxy_catalog_insecure(
     enabled: bool,
 ) -> Result<CatalogView, String> {
     let view = catalog::set_insecure(source_id.clone(), node_id, revision, enabled).await?;
+    crate::modules::codex_unified_proxy::resync_source(&source_id, false).await;
+    Ok(view)
+}
+
+#[tauri::command]
+pub async fn codex_proxy_catalog_group_insecure(
+    source_id: String,
+    group_id: String,
+    revision: String,
+    enabled: bool,
+) -> Result<CatalogView, String> {
+    let view = catalog::set_group_insecure(source_id.clone(), group_id, revision, enabled).await?;
     crate::modules::codex_unified_proxy::resync_source(&source_id, false).await;
     Ok(view)
 }

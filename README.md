@@ -461,7 +461,7 @@ QQ 交流群、微信群或新建的 Telegram 畅聊群都可以加入。
 
 ## 致谢
 
-- Codex 代理工作台的页面层级、订阅卡片、分组/节点选择交互和订阅来源命名参考 [Clash Verge Rev](https://github.com/clash-verge-rev/clash-verge-rev) 的界面及订阅响应头处理思路；仅为设计与实现参考，不是运行时依赖或官方合作。
+- Codex 代理工作台的页面层级、订阅卡片、当前节点展示、分组/节点下拉、延迟徽章与排序、原生测速接口调用、快速切换交互和订阅来源命名参考 [Clash Verge Rev](https://github.com/clash-verge-rev/clash-verge-rev) 的界面及实现思路；仅为设计与实现参考，不是运行时依赖或官方合作。
 - Codex 代理首次绑定的简短操作路径与当前节点展示参考 [Hiddify](https://github.com/hiddify/hiddify-app)；仅参考交互方向，未集成其代码或服务。
 - Codex 代理节点筛选、排序、延迟测试及窄窗口布局参考 [FlClash](https://github.com/chen08209/FlClash)；仅参考交互方向，未集成其代码或服务。
 - Codex 账号代理使用 [Mihomo](https://github.com/MetaCubeX/mihomo) 独立进程处理受支持的 Clash 节点与分组，节点参数、嵌套分组与内置阻断策略的配置语义、本地连接日志接口以及健康检查与故障转移设计参考其官方源码和文档；内核由用户主动下载或导入，宿主安装包不内置，不代表官方合作关系。

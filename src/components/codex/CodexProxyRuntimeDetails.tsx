@@ -12,9 +12,14 @@ export function CodexProxyRuntimePort({ row }: { row: ProxyRuntimeRow }) {
 
 export function CodexProxyRuntimeDetails({ row }: { row: ProxyRuntimeRow }) {
   const { t } = useTranslation();
-  if (!row.entry) return null;
+  if (!row.entry && !row.selection) return null;
   const { entry } = row;
   return <div className="codex-proxy-runtime-details">
+    {row.selection && <small>
+      {row.selection.delayMs != null ? `${row.selection.delayMs} ms` : t(row.selection.checkedAt != null ? 'common.failed' : 'codex.proxy.latencyPending')}
+      {row.selection.checkedAt != null && <> · {t('codex.proxy.latencyCheckedAt')} <time dateTime={new Date(row.selection.checkedAt).toISOString()}>{new Date(row.selection.checkedAt).toLocaleTimeString()}</time></>}
+    </small>}
+    {entry && <>
     <small className={entry.lastRequestState === 'failed' ? 'is-failure' : undefined}>
       <span title={t('codex.proxy.desktopEntryRequestsHint')}>{t('codex.proxy.desktopEntryRequests', { count: entry.requestCount })}</span>
       {(entry.lastRequestState !== 'none' || entry.state === 'listening') && <>{' · '}{t(`codex.proxy.desktopRequest_${entry.lastRequestState}`)}</>}
@@ -24,5 +29,6 @@ export function CodexProxyRuntimeDetails({ row }: { row: ProxyRuntimeRow }) {
       {t('codex.proxy.desktopKernel')}{' · '}{t(`codex.proxy.runtime_${row.kernelState}`)}
       {row.kernelPort ? <> · <code>127.0.0.1:{row.kernelPort}</code></> : null}
     </small>}
+    </>}
   </div>;
 }

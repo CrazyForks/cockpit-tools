@@ -26,6 +26,7 @@ pub mod codex_account;
 pub mod codex_account_proxy;
 pub mod codex_proxy_probe;
 pub mod codex_proxy_engine;
+pub mod codex_proxy_engine_preflight;
 pub mod codex_proxy_activity;
 pub mod codex_proxy_engine_install;
 mod codex_proxy_engine_archive;

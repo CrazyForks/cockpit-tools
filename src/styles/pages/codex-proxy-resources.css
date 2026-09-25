@@ -1,3 +1,6 @@
+@import './codex-proxy-picker.css';
+@import './codex-proxy-picker-layout.css';
+
 .codex-resource-tabs { display: flex; gap: 5px; width: fit-content; max-width: 100%; padding: 4px; margin-bottom: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-secondary); }
 .codex-resource-tabs .btn { background: transparent; border-color: transparent; }
 .codex-resource-tabs .btn:hover { background: var(--bg-hover); }

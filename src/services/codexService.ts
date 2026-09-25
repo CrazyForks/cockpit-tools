@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { presentProxyEnginePrerequisite, withProxyEnginePrerequisite } from '../utils/codexProxyEnginePrerequisite';
 import {
   CodexAccount,
   CodexAccountNoteUpdate,
@@ -209,6 +210,7 @@ export async function switchCodexAccount(
     }
     return account;
   } catch (error) {
+    presentProxyEnginePrerequisite(error);
     if (String(error).includes('CODEX_START_CANCELLED')) {
       const cancelledPayload = {
         type: 'cancelled' as const,
@@ -691,10 +693,11 @@ export async function updateCodexAccountEgressProxy(
   accountId: string,
   egressProxyUrl: string | null,
 ): Promise<CodexAccount> {
-  return await invoke('update_codex_account_egress_proxy', {
+  const request = invoke<CodexAccount>('update_codex_account_egress_proxy', {
     accountId,
     egressProxyUrl,
   });
+  return egressProxyUrl ? withProxyEnginePrerequisite(request) : request;
 }
 
 

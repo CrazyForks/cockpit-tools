@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import * as enginePrerequisite from '../utils/codexProxyEnginePrerequisite';
 
 const compiled = ts.transpileModule(readFileSync(new URL('./codexUnifiedProxyService.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -13,7 +14,7 @@ function harness(invoke: (command: string, args?: unknown) => Promise<unknown>) 
   const calls: Array<{ command: string; args?: unknown }> = [];
   vm.runInNewContext(compiled, {
     exports,
-    require: () => ({ invoke: (command: string, args?: unknown) => { calls.push({ command, args }); return invoke(command, args); } }),
+    require: (name: string) => name.endsWith('codexProxyEnginePrerequisite') ? enginePrerequisite : ({ invoke: (command: string, args?: unknown) => { calls.push({ command, args }); return invoke(command, args); } }),
   });
   /** Arguments are built inside the VM realm, so compare a plain copy instead of its prototype. */
   const call = (index: number) => JSON.parse(JSON.stringify(calls[index] ?? null));

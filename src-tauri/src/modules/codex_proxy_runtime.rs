@@ -172,6 +172,9 @@ pub struct RuntimeStatus {
     pub account_node: Option<String>,
     pub desktop_node: Option<String>,
     pub sidecar_node: Option<String>,
+    pub account_selection: Option<codex_proxy_engine::ProxySelection>,
+    pub desktop_selection: Option<codex_proxy_engine::ProxySelection>,
+    pub sidecar_selection: Option<codex_proxy_engine::ProxySelection>,
     pub desktop_entry: Option<super::codex_proxy_desktop_router::EntryStatus>,
     pub proxy_source: &'static str,
     #[serde(serialize_with = "crate::modules::codex_account_proxy::serialize_summary")]
@@ -219,7 +222,7 @@ fn direct_proxy_has_credentials(value: &str) -> bool {
     url::Url::parse(value).is_ok_and(|url| !url.username().is_empty() || url.password().is_some())
 }
 
-fn desktop_engine_required(value: &str) -> bool {
+pub(crate) fn desktop_engine_required(value: &str) -> bool {
     !is_direct(value) || direct_proxy_has_credentials(value)
 }
 
@@ -260,6 +263,9 @@ fn initial_status(value: &str, engine_ready: bool) -> RuntimeStatus {
         account_node: None,
         desktop_node: None,
         sidecar_node: None,
+        account_selection: None,
+        desktop_selection: None,
+        sidecar_selection: None,
         desktop_entry: None,
         proxy_source: "none",
         effective_proxy: None,
@@ -284,6 +290,9 @@ pub async fn status(account_id: &str) -> Result<RuntimeStatus, String> {
                 account_node: None,
                 desktop_node: None,
                 sidecar_node: None,
+        account_selection: None,
+        desktop_selection: None,
+        sidecar_selection: None,
                 desktop_entry: None,
                 proxy_source: "none",
                 effective_proxy: None,
@@ -333,9 +342,9 @@ pub async fn status(account_id: &str) -> Result<RuntimeStatus, String> {
     );
     let sidecar_reader = reader(state.sidecar_tunnel.as_ref(), result.sidecar == "running");
     drop(state);
-    async fn selected(reader: Option<codex_proxy_engine::SelectionReader>) -> Option<String> {
+    async fn selected(reader: Option<codex_proxy_engine::SelectionReader>) -> Option<codex_proxy_engine::ProxySelection> {
         match reader {
-            Some(reader) => reader.selected_node().await.ok().flatten(),
+            Some(reader) => reader.selected_info().await.ok().flatten(),
             None => None,
         }
     }
@@ -344,12 +353,15 @@ pub async fn status(account_id: &str) -> Result<RuntimeStatus, String> {
         selected(desktop_reader),
         selected(sidecar_reader)
     );
-    result.account_node = a;
-    result.desktop_node = d;
+    result.account_node = a.as_ref().map(|value| value.name.clone());
+    result.desktop_node = d.as_ref().map(|value| value.name.clone());
+    result.account_selection = a;
+    result.desktop_selection = d;
+    result.sidecar_selection = if !direct { result.account_selection.clone() } else { s.clone() };
     result.sidecar_node = if !direct {
         result.account_node.clone()
     } else {
-        s
+        s.map(|value| value.name)
     };
     Ok(with_routing_status(result, &account, Some(value)))
 }
@@ -378,6 +390,9 @@ fn observe(state: &mut Runtime, value: &str, direct: bool, engine_ready: bool) -
         account_node: None,
         desktop_node: None,
         sidecar_node: None,
+        account_selection: None,
+        desktop_selection: None,
+        sidecar_selection: None,
         desktop_entry: None,
         proxy_source: "none",
         effective_proxy: None,
@@ -449,7 +464,7 @@ pub fn release_deleted_account(account_id: &str) {
     }
 }
 
-fn is_direct(value: &str) -> bool {
+pub(crate) fn is_direct(value: &str) -> bool {
     url::Url::parse(value)
         .is_ok_and(|url| matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h"))
 }
@@ -813,6 +828,7 @@ pub async fn ensure_sidecar(account_id: &str) -> Result<Option<String>, String> 
 
 /// A new node must start before durable binding replaces the old one. On failure,
 /// dropping the candidate kills it and the previous binding/runtime stays intact.
+/// Saving does not require an external probe; connectivity is checked explicitly.
 pub async fn save_binding(
     account_id: String,
     input: Option<String>,
@@ -827,18 +843,18 @@ pub async fn save_binding(
         .filter(|s| !s.is_empty())
         .map(normalize_binding)
         .transpose()?;
-    let engine_required = normalized.as_deref().is_some_and(desktop_engine_required);
-    let engine_ready = !engine_required || codex_proxy_engine::engine_ready().await?;
+    if let Some(value) = normalized.as_deref() {
+        super::codex_proxy_engine_preflight::for_url(
+            value,
+            super::codex_proxy_engine_preflight::Usage::AccountRequest,
+        ).await?;
+    }
     let candidate = if let Some(value) = normalized.as_deref().filter(|value| !is_direct(value)) {
-        if !engine_ready {
-            None
-        } else {
-            let _permit = tokio::time::timeout(Duration::from_secs(12), STARTS.acquire())
-                .await
-                .map_err(|_| "PROXY_ENGINE_TIMEOUT")?
-                .map_err(|_| "PROXY_RUNTIME_FAILED")?;
-            Some(codex_proxy_engine::start(value).await?)
-        }
+        let _permit = tokio::time::timeout(Duration::from_secs(12), STARTS.acquire())
+            .await
+            .map_err(|_| "PROXY_ENGINE_TIMEOUT")?
+            .map_err(|_| "PROXY_RUNTIME_FAILED")?;
+        Some(codex_proxy_engine::start(value).await?)
     } else {
         None
     };
@@ -846,7 +862,20 @@ pub async fn save_binding(
         .as_deref()
         .filter(|value| sidecar_needs_private_tunnel(value))
     {
-        if !engine_ready {
+        // The account's raw HTTP/SOCKS request path does not need Mihomo.
+        // Preparing its private sidecar bridge is optional at save time; the
+        // desktop/sidecar launch itself still fails closed if no engine is ready.
+        let ready = match super::codex_proxy_engine_preflight::require().await {
+            Ok(()) => true,
+            Err(error) if super::codex_proxy_engine_preflight::is_prerequisite_error(&error) => {
+                crate::modules::logger::log_info(&format!(
+                    "[CodexProxy] raw request proxy does not require an engine; private bridge preparation deferred: {error}"
+                ));
+                false
+            }
+            Err(error) => return Err(error),
+        };
+        if !ready {
             None
         } else {
             let _permit = tokio::time::timeout(Duration::from_secs(12), STARTS.acquire())

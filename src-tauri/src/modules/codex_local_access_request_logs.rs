@@ -1733,29 +1733,69 @@ pub async fn query_recent_account_proxy_requests(
     {
         return Err("PROXY_INVALID_ACCOUNT".into());
     }
-    let account = crate::modules::codex_proxy_runtime::load(&account_id).await?;
     tauri::async_runtime::spawn_blocking(move || {
-        if !crate::modules::codex_account_proxy::has_configured_url(&account)? {
-            return Err("PROXY_ACCOUNT_UNSUPPORTED".into());
-        }
         let path = local_access_logs_db_path()?;
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|_| "PROXY_LOGS_UNAVAILABLE".to_string())?;
-        conn.busy_timeout(Duration::from_secs(1))
-            .map_err(|_| "PROXY_LOGS_UNAVAILABLE".to_string())?;
-        query_recent_account_proxy_requests_from_conn(&conn, &account_id)
-            .map_err(|_| "PROXY_LOGS_UNAVAILABLE".to_string())
+        read_recent_account_proxy_requests(&path, &account_id)
     })
     .await
     .map_err(|_| "PROXY_LOGS_UNAVAILABLE".to_string())?
 }
 
+// Historical metadata is independent of today's account/proxy/engine configuration.
+// Keep this a read-only path: no account decryption, runtime startup or DB migration.
+fn read_recent_account_proxy_requests(
+    path: &Path,
+    account_id: &str,
+) -> Result<Vec<CodexAccountProxyRecentRequest>, String> {
+    if !path.try_exists().map_err(|_| "PROXY_LOGS_UNAVAILABLE".to_string())? {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|_| "PROXY_LOGS_UNAVAILABLE".to_string())?;
+    conn.busy_timeout(Duration::from_secs(1))
+        .map_err(|_| "PROXY_LOGS_UNAVAILABLE".to_string())?;
+    query_recent_account_proxy_requests_from_conn(&conn, account_id)
+        .map_err(|_| "PROXY_LOGS_UNAVAILABLE".to_string())
+}
+
 #[cfg(test)]
 mod account_proxy_recent_request_tests {
     use super::*;
+
+    #[test]
+    fn history_reads_need_only_the_log_db_and_never_create_or_repair_it() {
+        struct Fixture(PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let fixture = Fixture(std::env::temp_dir().join(format!(
+            "cockpit-proxy-history-{}", uuid::Uuid::new_v4()
+        )));
+        fs::create_dir_all(&fixture.0).unwrap();
+        let path = fixture.0.join("history.db");
+        // No account file, binding, unified settings, or engine exists in this fixture.
+        assert!(read_recent_account_proxy_requests(&path, "unbound-account").unwrap().is_empty());
+        assert!(!path.exists(), "reading absent history must not create a database");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE request_logs (
+            id INTEGER PRIMARY KEY, timestamp INTEGER, account_id TEXT, gateway_mode TEXT,
+            model_id TEXT, success INTEGER, http_status INTEGER, latency_ms INTEGER
+        );").unwrap();
+        for id in 1..=12 {
+            conn.execute("INSERT INTO request_logs VALUES (?1, ?1, 'unbound-account', 'sidecar', 'model', 1, 200, 10)", params![id]).unwrap();
+        }
+        drop(conn);
+        let before = fs::read(&path).unwrap();
+        let rows = read_recent_account_proxy_requests(&path, "unbound-account").unwrap();
+        assert_eq!(rows.iter().map(|row| row.timestamp).collect::<Vec<_>>(), vec![12, 11, 10, 9, 8, 7, 6, 5]);
+        assert!(read_recent_account_proxy_requests(&path, "other-account").unwrap().is_empty());
+        assert_eq!(fs::read(&path).unwrap(), before, "history reads must not modify storage");
+        fs::write(&path, b"corrupt sqlite database").unwrap();
+        assert_eq!(read_recent_account_proxy_requests(&path, "unbound-account").unwrap_err(), "PROXY_LOGS_UNAVAILABLE");
+        assert_eq!(fs::read(&path).unwrap(), b"corrupt sqlite database");
+    }
 
     #[test]
     fn recent_request_summary_filters_exact_account_and_excludes_secrets() {

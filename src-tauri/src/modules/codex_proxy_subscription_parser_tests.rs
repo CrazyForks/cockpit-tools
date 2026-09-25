@@ -107,7 +107,7 @@ fn revalidation_recomputes_availability_but_preserves_incompatible_nodes_and_opt
     validate(&mut catalog).unwrap();
     assert_eq!(
         catalog.groups[0].error.as_deref(),
-        Some("SUBSCRIPTION_GROUP_UNAVAILABLE")
+        Some("SUBSCRIPTION_GROUP_MEMBER_UNSUPPORTED")
     );
     assert_eq!(catalog.groups[0].members, vec!["REJECT", "Alpha"]);
     for reserved in [
@@ -181,6 +181,42 @@ fn cycles_missing_refs_and_remote_providers_disable_groups() {
         let c = parse(&fixture(&format!("proxy-groups:\n{groups}"))).unwrap();
         assert!(c.groups.iter().all(|g| g.error.is_some()));
     }
+}
+
+#[test]
+fn group_diagnostics_distinguish_missing_members_cycles_and_unsupported_options() {
+    let catalog = parse(&fixture("proxy-groups:\n  - {name: A, type: url-test, proxies: [B]}\n  - {name: B, type: url-test, proxies: [A]}\n  - {name: Missing, type: url-test, proxies: [Alpha, Removed]}\n  - {name: Options, type: fallback, proxies: [Alpha], unsupported: true}\n  - {name: Outer, type: url-test, proxies: [Options]}\n")).unwrap();
+    assert_eq!(
+        catalog.groups[0].error.as_deref(),
+        Some("SUBSCRIPTION_GROUP_CYCLE")
+    );
+    assert_eq!(
+        catalog.groups[1].error.as_deref(),
+        Some("SUBSCRIPTION_GROUP_CYCLE")
+    );
+    assert_eq!(
+        catalog.groups[2].error.as_deref(),
+        Some("SUBSCRIPTION_GROUP_MEMBER_MISSING")
+    );
+    assert_eq!(
+        catalog.groups[4].error.as_deref(),
+        Some("SUBSCRIPTION_GROUP_MEMBER_UNSUPPORTED")
+    );
+    let issues = group_issues(&catalog);
+    assert_eq!(issues[2][0].name, "Removed");
+    assert_eq!(issues[2][0].error, "SUBSCRIPTION_GROUP_MEMBER_MISSING");
+    assert_eq!(issues[4][0].name, "Options");
+    assert_eq!(issues[4][0].error, "SUBSCRIPTION_GROUP_OPTIONS");
+}
+
+#[test]
+fn group_diagnostics_shared_descendants_are_not_misreported_as_cycles() {
+    let catalog = parse(&fixture("proxy-groups:\n  - {name: Leaf, type: url-test, proxies: [Alpha]}\n  - {name: Left, type: url-test, proxies: [Leaf]}\n  - {name: Right, type: url-test, proxies: [Leaf]}\n  - {name: All, type: url-test, proxies: [Left, Right, Alpha]}\n")).unwrap();
+    assert!(catalog.groups.iter().all(|group| group.error.is_none()));
+    assert!(group_issues(&catalog).iter().all(Vec::is_empty));
+    let leaves = reachable_nodes(&catalog, &catalog.groups[3].id).unwrap();
+    assert_eq!(leaves.len(), 1);
+    assert_eq!(leaves[0].name, "Alpha");
 }
 #[test]
 fn ignores_top_level_executable_and_network_configuration() {
@@ -409,7 +445,7 @@ fn selectors_keep_usable_branches_while_urltest_preserves_all_members() {
     assert!(c.groups[1].error.is_none());
     assert_eq!(
         c.groups[2].error.as_deref(),
-        Some("SUBSCRIPTION_GROUP_UNAVAILABLE")
+        Some("SUBSCRIPTION_GROUP_MEMBER_UNSUPPORTED")
     );
     let selection = std::collections::BTreeMap::from([(c.groups[0].id.clone(), "Alpha".into())]);
     let encoded = super::super::codex_proxy_catalog_binding::encode(

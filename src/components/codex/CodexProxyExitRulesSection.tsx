@@ -21,7 +21,7 @@ const EMPTY_CELL = '—';
  */
 export function CodexProxyExitRulesSection() {
   const { t } = useTranslation();
-  const { accounts, catalog, catalogLoading, catalogError, reloadCatalog, unified, unifiedErrorKey, reloadUnified, selectAccount, goSection } = useCodexProxyWorkspace();
+  const { accounts, catalog, catalogLoading, catalogError, reloadCatalog, acceptCatalog, unified, unifiedErrorKey, reloadUnified, selectAccount, goSection } = useCodexProxyWorkspace();
   const resolveName = useCodexProxyAccountName();
   const eligible = useMemo(() => accounts.filter(canUseCodexAccountProxy), [accounts]);
   const [view, setView] = useState<CodexUnifiedProxyView | null>(unified);
@@ -100,7 +100,7 @@ export function CodexProxyExitRulesSection() {
         <p className="codex-proxy-page-note">{t('codex.proxy.unified.hint')}</p>
         {unifiedErrorKey && <div className="codex-proxy-page-error" role="alert">{t(unifiedErrorKey)}
           <button type="button" className="btn btn-secondary compact" onClick={() => reloadUnified()}>{t('common.retry')}</button></div>}
-        {!unifiedErrorKey && <CodexUnifiedProxyPanel totalAccounts={eligible.length} catalog={catalog} view={view}
+        {!unifiedErrorKey && <CodexUnifiedProxyPanel totalAccounts={eligible.length} catalog={catalog} view={view} onCatalogChange={acceptCatalog}
           onViewChange={(next) => { setView(next); reloadUnified(); }} onGoResources={() => goSection('resources')} />}
         <p className="codex-proxy-page-note">{t('codex.proxy.unified.restartHint')}</p>
       </section>

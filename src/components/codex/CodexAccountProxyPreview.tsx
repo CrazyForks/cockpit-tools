@@ -1,9 +1,12 @@
-import { useId, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Activity, ArrowRight, Clock3, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { CodexAccount } from '../../types/codex';
-import { proxyRuntimeRows, proxyRuntimeChanges, proxyRuntimeLabelKey } from '../../utils/codexProxyPreview';
+import { proxyPreviewBinding, proxyRuntimeRows, proxyRuntimeChanges, proxyRuntimeLabelKey } from '../../utils/codexProxyPreview';
+import { useCodexAccountStore } from '../../stores/useCodexAccountStore';
+import { CodexProxyWorkspaceProvider } from './CodexProxyWorkspaceContext';
+import { CodexProxyQuickSwitch } from './CodexProxyQuickSwitch';
 import { useEscCloseTopmost } from '../../hooks/useEscClose';
 import { useModalScrollLock } from '../../hooks/useModalScrollLock';
 import { useModalFocusTrap } from '../../hooks/useModalFocusTrap';
@@ -22,24 +25,33 @@ interface Props {
 }
 
 /**
- * Read-only egress summary for one account. Selection, checks and binding live on
- * the shared proxy page, so this dialog never becomes a second editing entry.
+ * Egress summary with an explicit account-only quick switch. Resource management
+ * remains on the shared page; the editor and backend binding transaction are reused.
  */
 export function CodexAccountProxyPreview({ account, displayName, onClose, onManage }: Props) {
   const { t } = useTranslation();
   const titleId = useId();
   const dialog = useRef<HTMLDivElement>(null);
+  const switchButton = useRef<HTMLButtonElement>(null);
   const data = useCodexProxyPreview(account.id);
+  const latestAccount = useCodexAccountStore((state) => state.accounts.find((entry) => entry.id === account.id)) ?? account;
+  const accounts = useMemo(() => [latestAccount], [latestAccount]);
+  const [editingAccount, setEditingAccount] = useState<string | null>(null);
+  const editing = editingAccount === account.id;
+  const closeSwitch = () => {
+    setEditingAccount(null);
+    requestAnimationFrame(() => switchButton.current?.focus({ preventScroll: true }));
+  };
   const [activityView, setActivityView] = useState<'api' | 'proxy'>('api');
-  useEscCloseTopmost(true, onClose);
+  useEscCloseTopmost(!editing, onClose);
   useModalScrollLock(true);
   useModalFocusTrap(dialog, true);
 
   const error = [data.statusError ? t('codex.proxy.runtimeUnavailable') : '',
     data.requestsError ? t('codex.proxy.recentFailed') : ''].filter(Boolean).join(' · ');
 
-  return createPortal(<div className="modal-overlay codex-proxy-preview-overlay">
-    <div className="modal codex-proxy-preview" ref={dialog} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+  return createPortal(<><div className="modal-overlay codex-proxy-preview-overlay" inert={editing} aria-hidden={editing || undefined}>
+    <div className="modal codex-proxy-preview" ref={dialog} role="dialog" aria-modal={!editing || undefined} aria-labelledby={titleId} tabIndex={-1}>
       <header className="modal-header">
         <div className="codex-proxy-preview-heading"><span className="codex-proxy-preview-icon"><ShieldCheck size={25} /></span>
           <div><h2 id={titleId}>{t('codex.proxy.previewTitle')}</h2><p>{displayName}</p></div></div>
@@ -47,7 +59,8 @@ export function CodexAccountProxyPreview({ account, displayName, onClose, onMana
       </header>
       <div className="modal-body">
         <ModalErrorMessage message={error} />
-        <CodexProxyConnectionSummary account={account} status={data.status} failed={data.statusError} />
+        <CodexProxyConnectionSummary account={latestAccount} status={data.status} failed={data.statusError}
+          switchButtonRef={switchButton} onSwitch={() => setEditingAccount(account.id)} />
         <div className="codex-proxy-preview-help"><span>{t('codex.proxy.runtimeHint')}</span></div>
         <section className="codex-proxy-preview-runtime" aria-label={t('codex.proxy.runtimeTitle')}>
           {proxyRuntimeRows(data.status).map((row) => <div key={row.kind}>
@@ -94,5 +107,12 @@ export function CodexAccountProxyPreview({ account, displayName, onClose, onMana
           <button type="button" className="btn btn-primary" onClick={onManage}>{t('codex.proxy.management')}<ArrowRight size={16} /></button></div>
       </footer>
     </div>
-  </div>, document.body);
+  </div>
+    {editing && <CodexProxyWorkspaceProvider key={account.id} accounts={accounts} accountId={account.id}>
+      <CodexProxyQuickSwitch accountId={account.id} displayName={displayName}
+        initialBinding={proxyPreviewBinding(latestAccount.egress_proxy, data.status).summary}
+        bindingReady={data.status !== null || Boolean(latestAccount.egress_proxy)} runtimeStatus={data.status}
+        onClose={closeSwitch} onApplied={() => { closeSwitch(); data.refresh(); }} />
+    </CodexProxyWorkspaceProvider>}
+  </>, document.body);
 }

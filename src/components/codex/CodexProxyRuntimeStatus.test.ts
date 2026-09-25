@@ -98,3 +98,44 @@ test('the preview summary shows effective unified routing even without an indepe
   assert.doesNotMatch(render(null), /No account proxy|Unbound/);
   assert.match(render(null, account, true), /Could not read runtime status|Unable to read status|Status unavailable|Failed to read status/);
 });
+
+test('current-node card shows the actual leaf beside the switch action and keeps automatic policy separate', async () => {
+  const i18n = await translator();
+  const render = (status: CodexProxyRuntimeStatus) => renderToStaticMarkup(createElement(I18nextProvider, { i18n },
+    createElement(CodexProxyConnectionSummary, { account, status, failed: false, onSwitch: () => {} })));
+  const status: CodexProxyRuntimeStatus = { ...base, proxySource: 'unified',
+    effectiveProxy: { protocol: 'RESOURCE', name: 'US automatic policy' },
+    accountNode: 'US actual leaf', sidecarNode: 'US actual leaf',
+    accountSelection: { name: 'US actual leaf', delayMs: 216, checkedAt: 1750000000000 } };
+  const html = render(status);
+  const current = html.slice(html.indexOf('class="codex-proxy-preview-current"'));
+  assert.match(html, /US automatic policy/);
+  assert.match(current, /Current node/);
+  assert.match(current, /US actual leaf/);
+  assert.match(current, /216 ms/);
+  assert.match(current, /aria-haspopup="dialog"/);
+  assert.match(current, /Switch node/);
+  assert.doesNotMatch(current, /US automatic policy/);
+  assert.doesNotMatch(current, /aria-expanded|Collapse/);
+  const stopped = render({ ...status, account: 'stopped', sidecar: 'stopped' });
+  assert.match(stopped, /Current node not available yet/);
+  assert.doesNotMatch(stopped, /US actual leaf|216 ms/);
+});
+
+test('current-node card distinguishes channels, deduplicates shared leaves and never attaches another node’s delay', async () => {
+  const i18n = await translator();
+  const render = (status: CodexProxyRuntimeStatus) => renderToStaticMarkup(createElement(I18nextProvider, { i18n },
+    createElement(CodexProxyConnectionSummary, { account, status, failed: false })));
+  const status: CodexProxyRuntimeStatus = { ...base, desktop: 'running', accountNode: 'API leaf', sidecarNode: 'API leaf', desktopNode: 'Desktop leaf',
+    accountSelection: { name: 'Old leaf', delayMs: 999, checkedAt: 1750000000000 },
+    desktopSelection: { name: 'Desktop leaf', delayMs: 123, checkedAt: 1750000000000 } };
+  const html = render(status);
+  assert.match(html, /API leaf/);
+  assert.match(html, /Desktop leaf/);
+  assert.match(html, /123 ms/);
+  assert.ok(html.includes(renderToStaticMarkup(createElement('small', null, i18n.t('codex.proxy.runtimeDesktop')))));
+  assert.ok(html.includes(renderToStaticMarkup(createElement('small', null, i18n.t('codex.proxy.combinedRuntime')))));
+  assert.doesNotMatch(html, /Old leaf|999 ms/);
+  const shared = render({ ...status, desktopNode: 'API leaf', desktopSelection: null });
+  assert.equal((shared.match(/<strong>API leaf<\/strong>/g) ?? []).length, 1);
+});

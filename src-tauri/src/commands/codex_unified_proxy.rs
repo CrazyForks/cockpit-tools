@@ -96,6 +96,7 @@ pub async fn codex_unified_proxy_apply(
     selections: BTreeMap<String, String>,
     group_id: Option<String>,
 ) -> Result<UnifiedProxyView, String> {
+    crate::modules::codex_proxy_engine_preflight::require().await?;
     let _apply = APPLY_LOCK.try_lock().map_err(|_| "UNIFIED_PROXY_BUSY")?;
     let _guard = catalog::SourceGuard::new(source_id.clone())?;
     let snapshot = catalog::snapshot_with_group(
@@ -105,6 +106,8 @@ pub async fn codex_unified_proxy_apply(
         group_id.clone(),
     )
     .await?;
+    // Snapshot validation is local. Egress probes remain an explicit action and
+    // cannot veto an otherwise valid shared-exit configuration.
     let decoded = crate::modules::codex_proxy_catalog_binding::decode(&snapshot)
         .map_err(|_| "UNIFIED_PROXY_STALE".to_string())?;
     let reference = Reference {

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { withProxyEnginePrerequisite } from '../utils/codexProxyEnginePrerequisite';
 
 export interface EngineInstallStatus {
   supported: boolean;
@@ -17,9 +18,9 @@ export function engineInstallActive(status: EngineInstallStatus | null): boolean
   return !!status && ['downloading', 'importing', 'verifying', 'extracting', 'checking', 'installing'].includes(status.phase);
 }
 
-function withTimeout<T>(request: Promise<T>): Promise<T> {
+function withTimeout<T>(request: Promise<T>, timeoutMs = 10_000): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('ENGINE_INSTALL_TIMEOUT')), 10_000);
+    const timer = setTimeout(() => reject(new Error('ENGINE_INSTALL_TIMEOUT')), timeoutMs);
     request.then(resolve, reject).finally(() => clearTimeout(timer));
   });
 }
@@ -42,6 +43,17 @@ export function installCodexProxyEngine(archivePath: string | null): Promise<Eng
 
 export function cancelCodexProxyEngineInstall(jobId: string): Promise<void> {
   return withTimeout(invoke('codex_proxy_engine_cancel', { jobId }));
+}
+
+/** Explicit action only: page/status reads never execute the engine. */
+export function preflightCodexProxyEngine(showPrompt = true): Promise<void> {
+  const request = withTimeout(invoke<void>('codex_proxy_engine_preflight'), 20_000);
+  return showPrompt ? withProxyEnginePrerequisite(request) : request;
+}
+
+/** Run before a frontend restart stops the old client; the backend resolves its actual account. */
+export function preflightCodexProxyInstance(instanceId: string): Promise<void> {
+  return withProxyEnginePrerequisite(withTimeout(invoke<void>('codex_proxy_instance_preflight', { instanceId }), 20_000));
 }
 
 /** Never display backend errors or a local archive path verbatim. */

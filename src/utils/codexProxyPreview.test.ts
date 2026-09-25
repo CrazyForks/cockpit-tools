@@ -143,3 +143,13 @@ test('failed native reads are cleared so the same account can retry', async () =
   await assert.rejects(fetch('a'), /unavailable/);
   assert.equal(await fetch('a'), 'recovered');
 });
+
+
+test('current delay stays attached to its selected node and stale measurements cannot label a new node', () => {
+  const status = { account: 'running', desktop: 'idle', sidecar: 'running', accountPort: 8001, desktopPort: null, sidecarPort: 8001,
+    accountNode: 'US', sidecarNode: 'US', accountSelection: { name: 'US', delayMs: 216, checkedAt: 1234 } } as const;
+  const rows = proxyRuntimeRows(status);
+  assert.equal(rows[0].selection?.delayMs, 216);
+  const changed = proxyRuntimeRows({ ...status, accountNode: 'JP', sidecarNode: 'JP' });
+  assert.equal(changed[0].selection, undefined);
+});

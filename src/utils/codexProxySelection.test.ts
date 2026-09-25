@@ -5,6 +5,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
 import { CodexProxyPicker } from '../components/codex/CodexProxyPicker';
+import { CodexProxySelect } from '../components/codex/CodexProxySelect';
+import { loadHookModule } from '../../tests/helpers/reactHookHarness';
 import { defaultProxySelections, proxySelectionGroup, restoreProxySelection, savedRootProxySelections, sourceDefaultDraft } from './codexProxySelection';
 import type { ProxyCatalogSource, ProxyCatalogGroup } from '../services/codexProxyCatalogService';
 import type { CodexAccount } from '../types/codex';
@@ -13,6 +15,13 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import * as selectionUtils from './codexProxySelection';
 import * as catalogService from '../services/codexProxyCatalogService';
+import * as pickerModel from './codexProxyPickerModel';
+import * as previewUtils from './codexProxyPreview';
+
+function elements(tree: any): any[] {
+  if (!tree || typeof tree !== 'object') return [];
+  return Array.isArray(tree) ? tree.flatMap(elements) : [tree, ...elements(tree.props?.children)];
+}
 
 const group = (id: string, kind: string, members: string[]): ProxyCatalogGroup => ({ id, name: id, kind, members, supported: true, error: null });
 const source: ProxyCatalogSource = {
@@ -152,17 +161,18 @@ test('default commands keep the IPC contract for source ids, item ids and member
   ]));
 });
 
-test('picker renders restored node and group policy without summary, policy button or breadcrumb', async () => {
+test('picker renders restored node and group policy alongside its current selection card', async () => {
   const i18n = createInstance();
   await i18n.init({ lng: 'en', resources: { en: { translation: { codex: { proxy: { catalog: {
     groups: 'Groups', nodes: 'Nodes', groupPolicyChoice: 'Group policy', measureGroup: 'Test group',
   } } } } } } });
-  const latency = { results: {}, running: false, total: 0, completed: 0, measure: () => {}, cancel: () => {} };
+  const latency = { results: {}, running: false, total: 0, completed: 0, errorKey: '', measure: () => {}, cancel: () => {} };
   const render = (itemId: string) => renderToStaticMarkup(createElement(I18nextProvider, { i18n },
     createElement(CodexProxyPicker, { source, itemId, selectedGroupId: 'manual', selections: {}, busy: false, latency, choose: () => {}, chooseMember: () => {} })));
   const nodeHtml = render('node-b');
   assert.match(nodeHtml, /<span>manual<\/span>/);
   assert.match(nodeHtml, /<span>Beta<\/span>/);
+  assert.match(nodeHtml, /class="codex-picker-current"/);
   assert.match(nodeHtml, /aria-label="Test group"/);
   assert.doesNotMatch(nodeHtml, /codex-picker-summary|codex-picker-path|useGroupPolicy|chooseMember/);
   const groupHtml = render('auto');
@@ -172,53 +182,46 @@ test('picker renders restored node and group policy without summary, policy butt
 
 test('picker keeps manual group identity while choosing its member; standalone nodes remain separate', () => {
   // Exercise component event handlers without a browser or GUI automation.
-  const compiled = ts.transpileModule(readFileSync(new URL('../components/codex/CodexProxyPicker.tsx', import.meta.url), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
-  }).outputText;
-  const hooks: unknown[] = []; let cursor = 0;
-  const exports: Record<string, any> = {};
-  vm.runInNewContext(compiled, { exports, require: (name: string) => {
-    if (name === 'react') return {
-      useState: (initial: unknown) => {
-        const index = cursor++;
-        if (!(index in hooks)) hooks[index] = typeof initial === 'function' ? initial() : initial;
-        return [hooks[index], (value: unknown) => { hooks[index] = value; }];
-      },
-      useMemo: (fn: () => unknown) => fn(), useEffect: () => {},
-    };
-    if (name === 'react/jsx-runtime') return { jsx: (type: unknown, props: unknown) => ({ type, props }), jsxs: (type: unknown, props: unknown) => ({ type, props }) };
-    if (name === 'react-i18next') return { useTranslation: () => ({ t: (key: string) => key }) };
-    if (name.endsWith('codexProxyCatalogService')) return catalogService;
-    if (name.endsWith('codexProxySelection')) return selectionUtils;
-    return {};
-  } });
-  let itemId = ''; let selectedGroupId = ''; let selections: Record<string, string> = {}; const chosen: string[] = []; const measurements: string[][] = [];
-  const latency = { results: {}, running: false, total: 0, completed: 0, measure: (ids: string[]) => measurements.push(ids), cancel: () => {} };
-  const render = () => {
-    cursor = 0;
-    return exports.CodexProxyPicker({ source, itemId, selectedGroupId, selections, busy: false, latency,
+  const h = loadHookModule(new URL('../components/codex/CodexProxyPicker.tsx', import.meta.url), {
+    'react-i18next': { useTranslation: () => ({ t: (key: string) => key }) },
+    '../../services/codexProxyCatalogService': catalogService,
+    '../../utils/codexProxySelection': selectionUtils,
+    '../../utils/codexProxyPickerModel': pickerModel,
+    '../../utils/codexProxyPreview': previewUtils,
+    './CodexProxySelect': { CodexProxySelect },
+  });
+  let itemId = ''; let selectedGroupId = ''; let selections: Record<string, string> = {}; const chosen: string[] = [];
+  const measurements: { ids: string[]; onlyStale?: boolean; groupId?: string }[] = [];
+  const latency = { results: {}, running: false, total: 0, completed: 0, errorKey: '',
+    measure: (ids: string[], onlyStale?: boolean, groupId?: string) => measurements.push({ ids: [...ids], onlyStale, groupId }), cancel: () => {} };
+  const render = () => h.render(() => h.exports.CodexProxyPicker({ source, itemId, selectedGroupId, selections, busy: false, latency,
       choose: (id: string, nextGroup: string) => { itemId = id; selectedGroupId = nextGroup; selections = {}; chosen.push(id); },
-      chooseMember: (groupId: string, member: string) => { selections = { ...selections, [groupId]: member }; } });
+      chooseMember: (groupId: string, member: string) => { selections = { ...selections, [groupId]: member }; } }));
+  const select = (placeholder: string) => {
+    const entry = elements(render()).find((element) => element.type === CodexProxySelect && element.props.placeholder === `codex.proxy.catalog.${placeholder}`);
+    assert.ok(entry, `missing ${placeholder} selector`);
+    return entry;
   };
-  let rows = render().props.children;
-  rows[0].props.children[0].props.onChange('manual');
+  select('groups').props.onChange('manual');
   assert.equal(itemId, 'manual');
   assert.equal(defaultProxySelections(source, itemId, selections), null);
-  rows = render().props.children;
-  assert.equal(rows[0].props.children[0].props.value, 'manual');
-  rows[0].props.children[1].props.onClick();
-  assert.deepEqual(measurements, [['node-b', 'node-a']]);
+  assert.deepEqual(measurements, [{ ids: ['node-b', 'node-a'], onlyStale: true, groupId: 'manual' }], 'only the explicitly chosen group is checked');
+  assert.equal(select('groups').props.value, 'manual');
+  elements(render()).find((element) => element.props?.className?.includes('codex-picker-icon-button')).props.onClick();
+  assert.deepEqual(measurements[1], { ids: ['node-b', 'node-a'], onlyStale: false, groupId: 'manual' });
   assert.deepEqual(chosen, ['manual']);
-  rows[1][0].props.children.props.onChange('Beta');
+  select('chooseMember').props.onChange('Beta');
   assert.equal(itemId, 'manual');
   assert.deepEqual(defaultProxySelections(source, itemId, selections), { manual: 'Beta' });
-  rows[0].props.children[0].props.onChange('');
-  rows = render().props.children;
-  rows[2].props.children.props.onChange('node-a');
+  assert.deepEqual(measurements[2], { ids: ['node-b'], onlyStale: true, groupId: 'manual' });
+  select('groups').props.onChange('');
+  assert.deepEqual(measurements[3], { ids: [], onlyStale: true, groupId: undefined }, 'clearing the group restores standalone cache without testing nodes');
+  select('nodes').props.onChange('node-a');
   assert.equal(itemId, 'node-a');
-  rows = render().props.children;
-  assert.equal(rows[2].props.children.props.value, 'node-a');
+  assert.equal(select('nodes').props.value, 'node-a');
   assert.deepEqual(defaultProxySelections(source, itemId, selections), {});
+  assert.deepEqual(measurements[4], { ids: ['node-a'], onlyStale: true, groupId: undefined });
+  h.unmount();
 });
 
 test('shared nodes restore the recorded group, independent of subscription order', () => {
