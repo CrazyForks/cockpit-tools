@@ -39,6 +39,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **WorkBuddy encrypted sign-in files now support account switching and local import**: use the installed official client’s local key interface to read and write its encrypted credential fields, preserving other accounts and encryption. Unsupported or damaged ciphertext still stops the write without replacing the sign-in file; key preparation runs in the background with a timeout.
+
 - **Codex instance actions no longer overlap neighboring columns**: actions scroll horizontally with the table instead of staying pinned over the plan, Speed and PID columns in narrow windows; other platforms retain their existing behavior.
 
 - **Account-pool failures no longer appear as unrelated provider failures**: when per-account diagnostics are missing, the dialog shows the requested model and API key as a pool-level issue instead of marking every member, such as DeepSeek, unavailable. Recovery actions exclude unsupported models and policy exclusions; bulk recovery includes only visible, recoverable account issues, and credential failures retain reauthorization.

@@ -3418,7 +3418,7 @@ fn resolve_trae_launch_path_for_platform(
     Err(app_path_missing_error(platform.provider_key()))
 }
 
-fn resolve_workbuddy_launch_path() -> Result<std::path::PathBuf, String> {
+pub(crate) fn resolve_workbuddy_launch_path() -> Result<std::path::PathBuf, String> {
     if let Some(custom) = normalize_custom_path(Some(&config::get_user_config().workbuddy_app_path))
     {
         if let Some(exec) = resolve_workbuddy_macos_exec_path(&custom) {
