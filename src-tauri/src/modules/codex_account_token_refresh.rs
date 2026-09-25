@@ -885,6 +885,15 @@ fn build_account_storage_id(
     format!("codex_{:x}", md5::compute(seed.as_bytes()))
 }
 
+// OAuth 的邮箱兼容去重只能在自己的身份域内进行。Grok 的保留 ID
+// 也要排除：历史版本可能已把其 auth_mode 错改成 OAuth。
+fn is_oauth_identity_candidate(account: &CodexAccount) -> bool {
+    !account.is_api_key_auth()
+        && !account.is_agent_identity_auth()
+        && !account.id.starts_with("codex_grok_")
+        && normalize_optional_ref(account.upstream_grok_account_id.as_deref()).is_none()
+}
+
 fn find_existing_account_id(
     index: &CodexAccountIndex,
     email: &str,
@@ -903,14 +912,16 @@ fn find_existing_account_id(
         if !summary.email.eq_ignore_ascii_case(email) {
             continue;
         }
+        let Some(account) = load_account(&summary.id) else {
+            continue;
+        };
+        if !is_oauth_identity_candidate(&account) {
+            continue;
+        }
         email_match_count += 1;
         if first_email_match.is_none() {
             first_email_match = Some(summary.id.clone());
         }
-
-        let Some(account) = load_account(&summary.id) else {
-            continue;
-        };
 
         let current_account_id = normalize_optional_ref(account.account_id.as_deref());
         let current_org_id = normalize_optional_ref(account.organization_id.as_deref());

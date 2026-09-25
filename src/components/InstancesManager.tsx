@@ -666,7 +666,7 @@ export function InstancesManager<TAccount extends AccountLike>({
   const [formPath, setFormPath] = useState("");
   const [formWorkingDir, setFormWorkingDir] = useState("");
   const [formExtraArgs, setFormExtraArgs] = useState("");
-  const [formInitMode, setFormInitMode] = useState<InstanceInitMode>("copy");
+  const [formInitMode, setFormInitMode] = useState<InstanceInitMode>("empty");
   const [formLaunchMode, setFormLaunchMode] =
     useState<InstanceLaunchMode>("app");
   const [formAppSpeed, setFormAppSpeed] = useState<CodexAppSpeed>("standard");
@@ -1069,7 +1069,7 @@ export function InstancesManager<TAccount extends AccountLike>({
     setFormPath(showRoot && defaultRoot ? defaultRoot : "");
     setFormWorkingDir("");
     setFormExtraArgs("");
-    setFormInitMode(isGrokApp ? "empty" : "copy");
+    setFormInitMode("empty");
     setFormLaunchMode(isCliOnlyApp ? "cli" : "app");
     setFormAppSpeed("standard");
     setFormBindAccountId("");

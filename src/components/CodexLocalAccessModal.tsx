@@ -600,6 +600,13 @@ export function CodexLocalAccessModal({
     const healthById = new Map(
       (state?.accountHealth ?? []).map((health) => [health.accountId, health]),
     );
+    // 手动恢复后仍在抑制窗口内的账号：与账号状态弹框保持一致，
+    // 不再计入异常，也暂不参与“可用/异常”统计。
+    const suppressedAccountIds = new Set(
+      (state?.recoverySuppressedAccountIds ?? [])
+        .map((accountId) => accountId.trim())
+        .filter(Boolean),
+    );
     const poolUnavailableAccountIds = new Set<string>();
     (state?.accountPoolHealth ?? []).forEach((pool) => {
       const statuses = (pool.accountStatuses ?? []).filter((member) =>
@@ -626,6 +633,10 @@ export function CodexLocalAccessModal({
     };
 
     (collection?.accountIds ?? []).forEach((accountId) => {
+      if (suppressedAccountIds.has(accountId)) {
+        summary.available += 1;
+        return;
+      }
       const account = accountById.get(accountId);
       const health = healthById.get(accountId);
       if (!account) {
@@ -661,6 +672,7 @@ export function CodexLocalAccessModal({
     localAccessAccounts,
     state?.accountHealth,
     state?.accountPoolHealth,
+    state?.recoverySuppressedAccountIds,
   ]);
   const initialRestrictFreeAccounts = collection?.restrictFreeAccounts ?? true;
   const initialSessionAffinity = collection?.sessionAffinity ?? true;
@@ -4275,6 +4287,9 @@ export function CodexLocalAccessModal({
         accounts={accounts}
         accountHealth={state?.accountHealth ?? []}
         accountPoolHealth={state?.accountPoolHealth ?? []}
+        recoverySuppressedAccountIds={
+          state?.recoverySuppressedAccountIds ?? []
+        }
         actionBusy={healthActionBusy}
         maskAccountText={(value) => maskAccountText(value)}
         onClose={() => setHealthModalOpen(false)}
