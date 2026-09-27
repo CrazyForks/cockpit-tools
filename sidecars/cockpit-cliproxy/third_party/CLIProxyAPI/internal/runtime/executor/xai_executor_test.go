@@ -386,10 +386,24 @@ func TestXAIExecutorPrepareResponsesRequestRewritesCodexAgentMessage(t *testing.
 	if message.Get("content.1.encrypted_content").Exists() {
 		t.Fatalf("encrypted_content was preserved: %s", prepared.body)
 	}
-	if message.Get("id").String() != "amsg_019f92c3-6d77-7880-a6e4-f920867dc6a0" || message.Get("author").String() != "/root" || message.Get("recipient").String() != "/root/arithmetic_question" {
+	for _, key := range []string{"id", "author", "recipient", "internal_chat_message_metadata_passthrough"} {
+		if message.Get(key).Exists() {
+			t.Fatalf("private agent field %q reached upstream: %s", key, prepared.body)
+		}
+	}
+	if message.Get("content.#").Int() != 3 || message.Get("content.2.type").String() != "input_text" {
+		t.Fatalf("agent routing metadata block missing: %s", prepared.body)
+	}
+	const prefix = "Agent routing metadata: "
+	metadataText := message.Get("content.2.text").String()
+	if !strings.HasPrefix(metadataText, prefix) {
+		t.Fatalf("agent routing metadata prefix missing: %s", prepared.body)
+	}
+	metadata := gjson.Parse(strings.TrimPrefix(metadataText, prefix))
+	if metadata.Get("id").String() != "amsg_019f92c3-6d77-7880-a6e4-f920867dc6a0" || metadata.Get("author").String() != "/root" || metadata.Get("recipient").String() != "/root/arithmetic_question" {
 		t.Fatalf("agent message identity fields changed: %s", prepared.body)
 	}
-	if turnID := message.Get("internal_chat_message_metadata_passthrough.turn_id").String(); turnID != "019f92c3-6772-7213-8aac-8bd154d528f1" {
+	if turnID := metadata.Get("internal_chat_message_metadata_passthrough.turn_id").String(); turnID != "019f92c3-6772-7213-8aac-8bd154d528f1" {
 		t.Fatalf("turn_id = %q; body=%s", turnID, prepared.body)
 	}
 }

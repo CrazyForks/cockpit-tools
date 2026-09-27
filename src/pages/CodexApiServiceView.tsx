@@ -13,6 +13,7 @@ import { CodexLocalAccessModal } from "../components/CodexLocalAccessModal";
 import { CodexAccountPoolHealthModal } from "../components/CodexAccountPoolHealthModal";
 import { CodexStatsRangePicker } from "../components/CodexStatsRangePicker";
 import { CodexUsageTrend } from "../components/codex/CodexUsageTrend";
+import { CodexRequestProxyLabel } from "../components/codex/CodexRequestProxyLabel";
 import { PaginationControls } from "../components/PaginationControls";
 import { resolveCodexApiServiceLogModelPair } from "../utils/codexApiServiceLogModel";
 import { requestCodexOpenAddAccount } from "../utils/codexAddAccountRequest";
@@ -2524,6 +2525,7 @@ export function CodexApiServiceView(props: CodexApiServiceViewProps) {
                           <span>
                             {maskAccountText(accountDisplayName)}
                           </span>
+                          <CodexRequestProxyLabel route={event.proxyRoute} t={t} />
                           <span>{formatLatencyMs(event.latencyMs)}</span>
                           <span>
                             {formatCompactNumber(event.totalTokens)} Tokens

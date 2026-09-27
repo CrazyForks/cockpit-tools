@@ -1864,7 +1864,11 @@ pub fn export_accounts(account_ids: &[String]) -> Result<String, String> {
         .filter_map(|id| load_account(id))
         .collect();
 
-    serde_json::to_string_pretty(&accounts).map_err(|e| format!("序列化失败: {}", e))
+    serialize_accounts_for_export(&accounts)
+}
+
+fn serialize_accounts_for_export(accounts: &[CodexAccount]) -> Result<String, String> {
+    serde_json::to_string_pretty(accounts).map_err(|e| format!("序列化失败: {}", e))
 }
 
 #[derive(serde::Serialize, Clone)]
