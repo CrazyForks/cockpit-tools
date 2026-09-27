@@ -6621,7 +6621,7 @@ func TestXAIExecutorPreparesCodexMultiAgentV2Request(t *testing.T) {
 	}
 	var agentMessage gjson.Result
 	for _, item := range gjson.GetBytes(gotBody, "input").Array() {
-		if item.Get("type").String() == "message" && item.Get("recipient").String() == "root" {
+		if item.Get("type").String() == "message" && item.Get("content.0.text").String() == "child task text" {
 			agentMessage = item
 			break
 		}
@@ -6629,11 +6629,28 @@ func TestXAIExecutorPreparesCodexMultiAgentV2Request(t *testing.T) {
 	if !agentMessage.Exists() {
 		t.Fatalf("agent_message must be converted into a portable message item; body=%s", string(gotBody))
 	}
+	if got := agentMessage.Get("role").String(); got != "user" {
+		t.Fatalf("agent_message role = %q, want user; body=%s", got, string(gotBody))
+	}
+	for _, key := range []string{"author", "recipient", "id", "internal_chat_message_metadata_passthrough"} {
+		if agentMessage.Get(key).Exists() {
+			t.Fatalf("agent_message must not retain private top-level field %q; body=%s", key, string(gotBody))
+		}
+	}
 	if got := agentMessage.Get("content.0.type").String(); got != "input_text" {
 		t.Fatalf("agent_message content.0.type = %q, want input_text; body=%s", got, string(gotBody))
 	}
 	if got := agentMessage.Get("content.0.text").String(); got != "child task text" {
 		t.Fatalf("agent_message content.0.text = %q, want the decrypted task text; body=%s", got, string(gotBody))
+	}
+	if got := agentMessage.Get("content.#").Int(); got != 2 {
+		t.Fatalf("agent_message must preserve task text and append one metadata block; content count=%d; body=%s", got, string(gotBody))
+	}
+	if got := agentMessage.Get("content.1.type").String(); got != "input_text" {
+		t.Fatalf("agent_message metadata type = %q, want input_text; body=%s", got, string(gotBody))
+	}
+	if got := agentMessage.Get("content.1.text").String(); got != `Agent routing metadata: {"author":{"role":"user"},"recipient":"root"}` {
+		t.Fatalf("agent_message must preserve author and recipient in portable text; metadata=%q; body=%s", got, string(gotBody))
 	}
 	if got := gjson.GetBytes(gotBody, `input.#(type=="web_search_call").action.queries.0`).String(); got != "codex compatibility" {
 		t.Fatalf("web_search_call queries[0] = %q, want the original query; body=%s", got, string(gotBody))
