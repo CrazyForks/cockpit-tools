@@ -1,8 +1,8 @@
-import { Fragment, useEffect } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useModalScrollLock } from "../hooks/useModalScrollLock";
 import "./CodexAccountDialogs.css";
-import { Plus, RefreshCw, Download, Upload, Trash2, X, Globe, KeyRound, Power, Copy, Check, Play, Pause, RotateCw, CircleAlert, Info, Rows3, LayoutGrid, List, Search, ArrowDownWideNarrow, ArrowUp, ArrowDown, GripVertical, Clock, Tag, Star, Eye, EyeOff, BookOpen, FileText, ExternalLink, FolderOpen, FolderPlus, LogOut, Terminal, ChevronDown } from "lucide-react";
+import { Plus, RefreshCw, Download, Upload, Trash2, X, Globe, KeyRound, Power, Copy, Check, Play, Pause, RotateCw, CircleAlert, Info, Rows3, LayoutGrid, List, Search, ArrowDownWideNarrow, ArrowUp, ArrowDown, GripVertical, Clock, Tag, Star, Eye, EyeOff, BookOpen, FileText, ExternalLink, FolderOpen, FolderPlus, ChevronRight, LogOut, Terminal, ChevronDown } from "lucide-react";
 import * as codexLocalAccessService from "../services/codexLocalAccessService";
 import { TagEditModal } from "../components/TagEditModal";
 import { ExportJsonModal } from "../components/ExportJsonModal";
@@ -27,6 +27,8 @@ import type { CodexExportFormat } from "../utils/codexExportFormats";
 import type { CodexAccountsViewProps } from "./CodexAccountsView";
 import { CodexAddAccountDialog } from "./CodexAddAccountDialog";
 import { useCodexPelicanStore } from "../stores/useCodexPelicanStore";
+import { CodexRecycleBinModal } from "../components/CodexRecycleBinModal";
+import { emitAccountsChanged } from "../utils/accountSyncEvents";
 import { PELICAN_GROUPS_CHANGED } from "../components/codex/pelican/PelicanResults";
 
 
@@ -53,7 +55,6 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
     activeAccountUsesPersonalAccessToken,
     activeGroup,
     activeGroupId,
-    authFailedExportAccountIds,
     availableTags,
     batchDeleteBusy,
     batchDeleteJob,
@@ -155,7 +156,6 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
     handleEditingApiBaseUrlCredentialsChange,
     handleEditingApiKeyCredentialsChange,
     handleExport,
-    handleExportAuthFailedAccounts,
     handleFetchEditingApiModelCatalog,
     handleKillLocalAccessPort,
     handleEnterGroup,
@@ -351,6 +351,12 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
     updateActiveAccountNoteForm,
     viewMode,
   } = props;
+  const [recycleBinOpen, setRecycleBinOpen] = useState(false);
+  const recycleBinButton = (
+    <button type="button" className="btn btn-secondary" onClick={() => setRecycleBinOpen(true)}>
+      <Trash2 size={14} /><span>{t("common.recycleBin.title")}</span>
+    </button>
+  );
   useEffect(() => {
     const reload = () => { void reloadCodexGroups(); };
     window.addEventListener(PELICAN_GROUPS_CHANGED, reload);
@@ -359,6 +365,14 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
   useModalScrollLock(Boolean(quickSwitchAccountId || editingApiKeyCredentialsId));
   return (
         <>
+          {recycleBinOpen && <CodexRecycleBinModal
+            onClose={() => setRecycleBinOpen(false)}
+            maskAccountText={maskAccountText}
+            onRestored={async () => {
+              await store.fetchAccounts();
+              await emitAccountsChanged({ platformId: "codex", reason: "restore" });
+            }}
+          />}
           {message && (
             <div
               className={`message-bar ${message.tone === "error" ? "error" : "success"}`}
@@ -670,6 +684,7 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
                 <button type="button" className="btn btn-secondary" onClick={() => useCodexPelicanStore.getState().open([...selected])}>
                   <Play size={14} /><span>{t('pelican.title')}</span>
                 </button>
+                {recycleBinButton}
                 {hasDetectableFullQuotaWakeupAccounts && (
                   <button
                     type="button"
@@ -779,6 +794,7 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
                   <Plus size={16} />
                   {t("common.shared.addAccount", "添加账号")}
                 </button>
+                {recycleBinButton}
                 <button
                   className="btn btn-secondary"
                   onClick={() =>
@@ -797,6 +813,7 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
           ) : filteredAccounts.length === 0 && !hasGroupEntryCards ? (
             <div className="empty-state">
               <h3>{t("common.shared.noMatch.title", "没有匹配的账号")}</h3>
+              {recycleBinButton}
               <p>
                 {t("common.shared.noMatch.desc", "请尝试调整搜索或筛选条件")}
               </p>
@@ -816,7 +833,7 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
                 <div className="codex-batch-delete-job">
                   <div className="codex-batch-delete-job__head">
                     <div>
-                      <strong>{t("codex.batchDelete.title")}</strong>
+                      <strong>{t("common.recycleBin.move")}</strong>
                       <span>
                         {t("codex.batchDelete.summary", {
                           completed: batchDeleteJob.completed,
@@ -2596,7 +2613,7 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
             <div className="modal-overlay">
               <div className="modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
-                  <h2>{t("common.confirm")}</h2>
+                  <h2>{t("common.recycleBin.move")}</h2>
                   <button
                     className="modal-close"
                     onClick={() => !batchDeleteBusy && setDeleteConfirm(null)}
@@ -2610,7 +2627,7 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
                     message={batchDeleteModalError || deleteConfirmError}
                     scrollKey={deleteConfirmErrorScrollKey}
                   />
-                  <p>{deleteConfirm.message}</p>
+                  <p>{t("common.recycleBin.confirmMove", { count: deleteConfirm.ids.length })}</p>
                 </div>
                 <div className="modal-footer">
                   <button
@@ -2627,7 +2644,7 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
                   >
                     {batchDeleteBusy
                       ? t("common.processing", "处理中...")
-                      : t("common.confirm")}
+                      : t("common.recycleBin.move")}
                   </button>
                 </div>
               </div>
@@ -3472,6 +3489,9 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
             accounts={accounts}
             accountHealth={localAccessState?.accountHealth ?? []}
             accountPoolHealth={localAccessState?.accountPoolHealth ?? []}
+            recoverySuppressedAccountIds={
+              localAccessState?.recoverySuppressedAccountIds ?? []
+            }
             actionBusy={localAccessHealthActionBusy}
             maskAccountText={maskAccountText}
             onClose={() => setShowLocalAccessHealthModal(false)}
