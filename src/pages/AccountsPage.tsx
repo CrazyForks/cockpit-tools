@@ -7,6 +7,7 @@ import {
   X,
   Globe,
   Check,
+  Copy,
   Lock,
   AlertTriangle,
   CircleAlert,
@@ -17,6 +18,7 @@ import {
   EyeOff,
   Tag,
   FileText,
+  ExternalLink,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAccountStore } from '../stores/useAccountStore'
@@ -49,8 +51,10 @@ import {
   calculateGroupQuota,
   updateGroupOrder
 } from '../services/groupService'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import {
   getAntigravityQuotaDisplayItems,
+  isAccountNeedsReauth,
 } from '../presentation/platformAccountPresentation'
 import {
   ANTIGRAVITY_RESET_SORT_PREFIX,
@@ -221,14 +225,51 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
   const getVerificationBadge = useCallback((account: Account) => {
     // 优先从 disabled_reason 读（新版），回退到验证历史（旧数据兼容）
     const reason = account.disabled_reason || verificationStatusMap[account.id]
-    if (reason === 'verification_required') {
-      return { label: t('wakeup.errorUi.verificationRequiredTitle', 'Need Verify'), className: 'is-warning' }
-    }
     if (reason === 'tos_violation') {
       return { label: t('wakeup.errorUi.tosViolationTitle', 'TOS'), className: 'is-tos-violation' }
     }
+    if (reason === 'verification_required' || isAccountNeedsReauth(account, verificationStatusMap)) {
+      return { label: t('accounts.status.needsReauth', '需网页验证'), className: 'is-warning' }
+    }
     return null
   }, [verificationStatusMap, t])
+
+  const resolveValidationUrl = useCallback((account: Account) => {
+    if (account.quota_error?.validation_url) return account.quota_error.validation_url
+    const vDetail = verificationDetailMap[account.id]
+    if (vDetail?.validationUrl) return vDetail.validationUrl
+    if (account.quota_error?.message) {
+      const match = account.quota_error.message.match(/https?:\/\/[^\s"'\)]+/)
+      if (match) return match[0]
+    }
+    return null
+  }, [verificationDetailMap])
+
+  const [copiedValidationUrlAccountId, setCopiedValidationUrlAccountId] = useState<string | null>(null)
+  const copiedValidationUrlTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleCopyValidationUrl = useCallback(async (accountId: string, url: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopiedValidationUrlAccountId(accountId)
+      if (copiedValidationUrlTimerRef.current) {
+        clearTimeout(copiedValidationUrlTimerRef.current)
+      }
+      copiedValidationUrlTimerRef.current = setTimeout(() => {
+        setCopiedValidationUrlAccountId(null)
+      }, 2000)
+    } catch (err) {
+      console.error('Failed to copy validation URL:', err)
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (copiedValidationUrlTimerRef.current) {
+        clearTimeout(copiedValidationUrlTimerRef.current)
+      }
+    }
+  }, [])
 
   // 文件损坏错误状态
   const [fileCorruptedError, setFileCorruptedError] = useState<FileCorruptedError | null>(null)
@@ -1145,7 +1186,8 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       const verificationReason = account.disabled_reason || verificationStatusMap[account.id]
       const hasVerificationIssue =
         verificationReason === 'verification_required' || verificationReason === 'tos_violation'
-      return isDisabled || isForbidden || hasWarning || hasVerificationIssue
+      const needsReauth = isAccountNeedsReauth(account, verificationStatusMap)
+      return isDisabled || isForbidden || hasWarning || hasVerificationIssue || needsReauth
     },
     [refreshWarnings, verificationStatusMap]
   )
@@ -2809,7 +2851,12 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     groupKey === untaggedKey ? t('accounts.untagged', '未分组') : groupKey
 
   const renderCustomQuotaSection = (account: Account, isList: boolean = false) => (
-    <AntigravityQuotaSection items={getQuotaDisplayItems(account)} isList={isList} t={t} />
+    <AntigravityQuotaSection
+      items={getQuotaDisplayItems(account)}
+      isList={isList}
+      isNeedsReauth={isAccountNeedsReauth(account, verificationStatusMap)}
+      t={t}
+    />
   );
 
   const renderGridCards = (items: Account[], groupKey?: string) =>
@@ -2875,7 +2922,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                 {warningLabel}
               </span>
             )}
-            {isDisabled && (
+            {isDisabled && !isAccountNeedsReauth(account, verificationStatusMap) && (
               <span className="status-pill disabled" title={disabledTitle}>
                 <CircleAlert size={12} />
                 {t('accounts.status.disabled')}
@@ -2911,6 +2958,62 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                 {t('codex.pendingAuth.authorizeAction', '授权添加')}
               </button>
             )}
+            {!isPendingAntigravityAccount(account) && isAccountNeedsReauth(account, verificationStatusMap) && (() => {
+              const validationUrl = resolveValidationUrl(account)
+              const isCopied = copiedValidationUrlAccountId === account.id
+              return (
+                <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline validation-warning-btn"
+                    style={{
+                      color: 'var(--color-warning, #f59e0b)',
+                      borderColor: 'var(--color-warning, #f59e0b)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}
+                    onClick={async () => {
+                      if (validationUrl) {
+                        try {
+                          await openUrl(validationUrl)
+                        } catch {
+                          window.open(validationUrl, '_blank', 'noopener,noreferrer')
+                        }
+                      } else {
+                        setShowVerificationErrorModal(account.id)
+                      }
+                    }}
+                    title={validationUrl || t('modals.errors.viewVerificationDetail', '查看验证详情')}
+                  >
+                    <ExternalLink size={12} />
+                    <span>{t('accounts.actions.openValidationUrl', '网页验证')}</span>
+                  </button>
+                  {validationUrl && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-outline copy-validation-btn"
+                      style={{
+                        color: isCopied ? 'var(--color-success, #10b981)' : 'var(--color-warning, #f59e0b)',
+                        borderColor: isCopied ? 'var(--color-success, #10b981)' : 'var(--color-warning, #f59e0b)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                      onClick={() => handleCopyValidationUrl(account.id, validationUrl)}
+                      title={t('accounts.actions.copyValidationUrlTooltip', '复制网页验证地址')}
+                    >
+                      {isCopied ? <Check size={12} /> : <Copy size={12} />}
+                      <span>
+                        {isCopied
+                          ? t('common.copied', '已复制')
+                          : t('accounts.actions.copyValidationUrl', '复制验证链接')}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              )
+            })()}
           </div>
 
           {account.notes && (
@@ -2965,11 +3068,11 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                   <Globe size={14} />
                 </button>
               )}
-              {(hasQuotaError || hasVerificationIssue) && (
+              {(hasQuotaError || hasVerificationIssue || isAccountNeedsReauth(account, verificationStatusMap)) && (
                 <button
                   className="card-action-btn is-danger"
                   onClick={() =>
-                    hasVerificationIssue
+                    (hasVerificationIssue || isAccountNeedsReauth(account, verificationStatusMap))
                       ? setShowVerificationErrorModal(account.id)
                       : setShowErrorModal(account.id)
                   }
@@ -3451,6 +3554,62 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                     {t('codex.pendingAuth.authorizeAction', '授权添加')}
                   </button>
                 )}
+                {!isPendingAntigravityAccount(account) && isAccountNeedsReauth(account, verificationStatusMap) && (() => {
+                  const validationUrl = resolveValidationUrl(account)
+                  const isCopied = copiedValidationUrlAccountId === account.id
+                  return (
+                    <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline validation-warning-btn"
+                        style={{
+                          color: 'var(--color-warning, #f59e0b)',
+                          borderColor: 'var(--color-warning, #f59e0b)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                        }}
+                        onClick={async () => {
+                          if (validationUrl) {
+                            try {
+                              await openUrl(validationUrl)
+                            } catch {
+                              window.open(validationUrl, '_blank', 'noopener,noreferrer')
+                            }
+                          } else {
+                            setShowVerificationErrorModal(account.id)
+                          }
+                        }}
+                        title={validationUrl || t('modals.errors.viewVerificationDetail', '查看验证详情')}
+                      >
+                        <ExternalLink size={12} />
+                        <span>{t('accounts.actions.openValidationUrl', '网页验证')}</span>
+                      </button>
+                      {validationUrl && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline copy-validation-btn"
+                          style={{
+                            color: isCopied ? 'var(--color-success, #10b981)' : 'var(--color-warning, #f59e0b)',
+                            borderColor: isCopied ? 'var(--color-success, #10b981)' : 'var(--color-warning, #f59e0b)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}
+                          onClick={() => handleCopyValidationUrl(account.id, validationUrl)}
+                          title={t('accounts.actions.copyValidationUrlTooltip', '复制网页验证地址')}
+                        >
+                          {isCopied ? <Check size={12} /> : <Copy size={12} />}
+                          <span>
+                            {isCopied
+                              ? t('common.copied', '已复制')
+                              : t('accounts.actions.copyValidationUrl', '复制验证链接')}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
               <div className="account-sub-line">
                 <span className={`tier-badge ${tierBadge.className}`}>
@@ -3471,7 +3630,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                     {warningLabel}
                   </span>
                 )}
-                {account.disabled && (
+                {account.disabled && !isAccountNeedsReauth(account, verificationStatusMap) && (
                   <span className="status-pill disabled" title={disabledTitle}>
                     <CircleAlert size={12} />
                     {t('accounts.status.disabled')}
@@ -3517,11 +3676,11 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                   <Globe size={16} />
                 </button>
               )}
-              {(hasQuotaError || hasVerificationIssue) && (
+              {(hasQuotaError || hasVerificationIssue || isAccountNeedsReauth(account, verificationStatusMap)) && (
                 <button
                   className="action-btn is-danger"
                   onClick={() =>
-                    hasVerificationIssue
+                    (hasVerificationIssue || isAccountNeedsReauth(account, verificationStatusMap))
                       ? setShowVerificationErrorModal(account.id)
                       : setShowErrorModal(account.id)
                   }
@@ -3684,6 +3843,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     confirmClearSwitchHistory,
     confirmDelete,
     confirmDeleteTag,
+    copiedValidationUrlAccountId,
     copyAccountNoteValue,
     currentAccount,
     customSortAccounts,
@@ -3718,6 +3878,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     handleBatchDelete,
     handleClearSwitchHistory,
     handleCopyOauthUrl,
+    handleCopyValidationUrl,
     handleCustomSortDragMove,
     handleCustomSortDragStart,
     handleExport,
@@ -3762,6 +3923,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     onNavigate,
     openAddModal,
     openOAuthAccountNoteModal,
+    openPendingOAuthAccount,
     openSwitchHistoryModal,
     paginatedIds,
     pagination,
@@ -3779,6 +3941,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     requestDeleteTag,
     resetAddModalState,
     resetCustomSortOrder,
+    resolveValidationUrl,
     savedMfaRecords,
     savingAccountNote,
     savingPendingOAuthAccount,

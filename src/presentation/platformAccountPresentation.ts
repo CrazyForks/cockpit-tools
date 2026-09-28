@@ -501,6 +501,31 @@ export function getAntigravityGroupResetTimestamp(
   }
   return earliest;
 }
+export function isAccountNeedsReauth(
+  account: Account,
+  verificationStatusMap?: Record<string, string>,
+): boolean {
+  const reason = account.disabled_reason || (verificationStatusMap ? verificationStatusMap[account.id] : undefined);
+  if (reason === 'verification_required' || reason?.startsWith('invalid_grant')) {
+    return true;
+  }
+  const qErr = account.quota_error;
+  if (qErr?.reason === 'VALIDATION_REQUIRED') {
+    return true;
+  }
+  if (Boolean(qErr?.validation_url)) {
+    return true;
+  }
+  if (
+    qErr?.message &&
+    (qErr.message.includes('Verify your account') ||
+      qErr.message.includes('VALIDATION_REQUIRED') ||
+      qErr.message.includes('invalid_grant'))
+  ) {
+    return true;
+  }
+  return false;
+}
 
 export function getAntigravityQuotaDisplayItems(
   account: Account,
