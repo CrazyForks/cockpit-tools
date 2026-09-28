@@ -356,7 +356,8 @@
         "unlimited": "Kuota tak terbatas",
         "leftPercent": "Tersisa {{value}}%",
         "cachedRefreshFailed": "Pembaruan gagal; menampilkan data terakhir yang berhasil",
-        "lastSuccessfulQuery": "Keberhasilan terakhir: {{time}}"
+        "lastSuccessfulQuery": "Keberhasilan terakhir: {{time}}",
+        "cachedNeedsReauth": "⚠️ Verifikasi web diperlukan untuk melanjutkan (data cache di bawah)"
       },
       "subtitle": "Pantau status kuota seluruh akun secara real-time.",
       "time": {
@@ -1526,7 +1527,9 @@
       "normal": "Normal​",
       "forbidden": "403​",
       "forbidden_tooltip": "API mengembalikan 403 Forbidden, akun tidak memiliki akses ke Gemini Code Assist",
-      "forbidden_msg": "Akun diblokir, penyegaran otomatis dilewati"
+      "forbidden_msg": "Akun diblokir, penyegaran otomatis dilewati",
+      "needsReauth": "Perlu Verifikasi Web",
+      "needsReauthTooltip": "Google memerlukan verifikasi keamanan web untuk melanjutkan"
     },
     "tier": {
       "pro": "PRO​",
@@ -1661,7 +1664,12 @@
       "delete": "Hapus",
       "deleteSelected": "Hapus yang Dipilih",
       "export": "Ekspor",
-      "refreshAll": "Refresh Semua"
+      "refreshAll": "Refresh Semua",
+      "reauth": "Otorisasi ulang",
+      "reauthTooltip": "Google memerlukan verifikasi ulang, klik untuk mengotorisasi ulang",
+      "openValidationUrl": "Verifikasi Web",
+      "copyValidationUrl": "Salin tautan verifikasi",
+      "copyValidationUrlTooltip": "Salin alamat verifikasi web"
     },
     "switchHistory": {
       "title": "Riwayat Penggantian",

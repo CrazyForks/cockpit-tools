@@ -344,7 +344,8 @@
         "unlimited": "Neomezená kvóta",
         "leftPercent": "Zbývá {{value}} %",
         "cachedRefreshFailed": "Aktualizace selhala; zobrazují se poslední úspěšná data",
-        "lastSuccessfulQuery": "Poslední úspěch: {{time}}"
+        "lastSuccessfulQuery": "Poslední úspěch: {{time}}",
+        "cachedNeedsReauth": "⚠️ Pro pokračování je vyžadováno webové ověření (níže jsou data z mezipaměti)"
       },
       "subtitle": "Spravujte své účty GitHub Copilot",
       "time": {
@@ -1479,7 +1480,9 @@
       "normal": "Normální",
       "forbidden": "403​",
       "forbidden_tooltip": "API vrátilo 403 Forbidden, účet nemá přístup k Gemini Code Assist",
-      "forbidden_msg": "Účet zakázán, automatická aktualizace přeskočena"
+      "forbidden_msg": "Účet zakázán, automatická aktualizace přeskočena",
+      "needsReauth": "Vyžadováno webové ověření",
+      "needsReauthTooltip": "Google vyžaduje webové bezpečnostní ověření pro pokračování"
     },
     "tier": {
       "pro": "PRO​",
@@ -1614,7 +1617,12 @@
       "delete": "Smazat",
       "deleteSelected": "Smazat vybrané",
       "export": "Exportovat",
-      "refreshAll": "Obnovit vše"
+      "refreshAll": "Obnovit vše",
+      "reauth": "Znovu autorizovat",
+      "reauthTooltip": "Google vyžaduje opětovné ověření, klikněte pro opětovnou autorizaci",
+      "openValidationUrl": "Webové ověření",
+      "copyValidationUrl": "Zkopírovat ověřovací odkaz",
+      "copyValidationUrlTooltip": "Zkopírovat adresu webového ověření"
     },
     "tabs": {
       "oauth": "OAuth autorizace",

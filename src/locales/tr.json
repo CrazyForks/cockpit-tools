@@ -344,7 +344,8 @@
         "unlimited": "Sınırsız kota",
         "leftPercent": "%{{value}} kaldı",
         "cachedRefreshFailed": "Yenileme başarısız; son başarılı veriler gösteriliyor",
-        "lastSuccessfulQuery": "Son başarılı: {{time}}"
+        "lastSuccessfulQuery": "Son başarılı: {{time}}",
+        "cachedNeedsReauth": "⚠️ Devam etmek için web doğrulaması gerekiyor (aşağıdaki veriler önbellekten)"
       },
       "subtitle": "GitHub Copilot hesaplarınızı yönetin",
       "time": {
@@ -1479,7 +1480,9 @@
       "normal": "Normal​",
       "forbidden": "403​",
       "forbidden_tooltip": "API 403 Forbidden döndürdü, hesabın Gemini Code Assist'e erişimi yok",
-      "forbidden_msg": "Hesap yasaklı, otomatik yenileme atlandı"
+      "forbidden_msg": "Hesap yasaklı, otomatik yenileme atlandı",
+      "needsReauth": "Web Doğrulaması Gerekiyor",
+      "needsReauthTooltip": "Google devam etmek için web güvenlik doğrulaması istiyor"
     },
     "tier": {
       "pro": "PRO​",
@@ -1614,7 +1617,12 @@
       "delete": "Sil",
       "deleteSelected": "Seçilenleri Sil",
       "export": "Dışa Aktar",
-      "refreshAll": "Tümünü Yenile"
+      "refreshAll": "Tümünü Yenile",
+      "reauth": "Yeniden yetkilendir",
+      "reauthTooltip": "Google yeniden doğrulama istiyor, yetkilendirmek için tıklayın",
+      "openValidationUrl": "Web Doğrulaması",
+      "copyValidationUrl": "Doğrulama bağlantısını kopyala",
+      "copyValidationUrlTooltip": "Web doğrulama adresini kopyala"
     },
     "tabs": {
       "oauth": "OAuth Yetkilendirme",

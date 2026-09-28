@@ -344,7 +344,8 @@
         "unlimited": "حصة غير محدودة",
         "leftPercent": "متبقي {{value}}٪",
         "cachedRefreshFailed": "فشل التحديث؛ يتم عرض آخر بيانات ناجحة",
-        "lastSuccessfulQuery": "آخر نجاح: {{time}}"
+        "lastSuccessfulQuery": "آخر نجاح: {{time}}",
+        "cachedNeedsReauth": "⚠️ يلزم التحقق من الويب للمتابعة (البيانات المخزنة مؤقتًا أدناه)"
       },
       "subtitle": "مراقبة حالة الحصة لجميع الحسابات في الوقت الفعلي.",
       "time": {
@@ -1526,7 +1527,9 @@
       "normal": "طبيعي",
       "forbidden": "403​",
       "forbidden_tooltip": "أرجعت API خطأ 403 Forbidden، الحساب لا يملك صلاحية استخدام Gemini Code Assist",
-      "forbidden_msg": "الحساب لا يملك صلاحية، تم تخطي التحديث التلقائي"
+      "forbidden_msg": "الحساب لا يملك صلاحية، تم تخطي التحديث التلقائي",
+      "needsReauth": "يلزم التحقق من الويب",
+      "needsReauthTooltip": "تطلب Google التحقق من أمان الويب للمتابعة"
     },
     "tier": {
       "pro": "PRO​",
@@ -1661,7 +1664,12 @@
       "delete": "حذف",
       "deleteSelected": "حذف المحدد",
       "export": "تصدير",
-      "refreshAll": "تحديث الكل"
+      "refreshAll": "تحديث الكل",
+      "reauth": "إعادة التفويض",
+      "reauthTooltip": "تطلب Google إعادة التحقق، انقر لإعادة التفويض فورًا",
+      "openValidationUrl": "التحقق من الويب",
+      "copyValidationUrl": "نسخ رابط التحقق",
+      "copyValidationUrlTooltip": "نسخ عنوان التحقق من الويب"
     },
     "tabs": {
       "oauth": "تفويض OAuth",

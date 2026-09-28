@@ -349,7 +349,8 @@
         "unlimited": "無限額度",
         "leftPercent": "剩餘 {{value}}%",
         "cachedRefreshFailed": "刷新失敗，以下為上次成功資料",
-        "lastSuccessfulQuery": "上次成功：{{time}}"
+        "lastSuccessfulQuery": "上次成功：{{time}}",
+        "cachedNeedsReauth": "⚠️ 帳號需完成網頁驗證以繼續使用（以下為上次成功數據）"
       },
       "subtitle": "管理您的 GitHub Copilot 帳號",
       "time": {
@@ -1479,7 +1480,9 @@
       "normal": "正常",
       "forbidden": "403",
       "forbidden_tooltip": "API 返回 403 Forbidden，帳號無權使用 Gemini Code Assist",
-      "forbidden_msg": "帳號無權限，已跳過自動刷新"
+      "forbidden_msg": "帳號無權限，已跳過自動刷新",
+      "needsReauth": "需網頁驗證",
+      "needsReauthTooltip": "Google 要求進行網頁安全驗證以繼續使用"
     },
     "tier": {
       "pro": "PRO",
@@ -1614,7 +1617,12 @@
       "delete": "刪除",
       "deleteSelected": "刪除所選",
       "export": "匯出",
-      "refreshAll": "全部重新整理"
+      "refreshAll": "全部重新整理",
+      "reauth": "重新授權",
+      "reauthTooltip": "Google 要求重新驗證，點擊立即重新授權",
+      "openValidationUrl": "網頁驗證",
+      "copyValidationUrl": "複製驗證連結",
+      "copyValidationUrlTooltip": "複製網頁驗證網址"
     },
     "tabs": {
       "oauth": "OAuth 授權",

@@ -349,7 +349,8 @@
         "unlimited": "Cuota ilimitada",
         "leftPercent": "Queda un {{value}} %",
         "cachedRefreshFailed": "Falló la actualización; se muestran los últimos datos correctos",
-        "lastSuccessfulQuery": "Último éxito: {{time}}"
+        "lastSuccessfulQuery": "Último éxito: {{time}}",
+        "cachedNeedsReauth": "⚠️ Se requiere verificación web para continuar (datos en caché abajo)"
       },
       "subtitle": "Supervisa en tiempo real el estado de cuota de todas las cuentas.",
       "time": {
@@ -1479,7 +1480,9 @@
       "normal": "Normal​",
       "forbidden": "403​",
       "forbidden_tooltip": "API devolvió 403 Forbidden, la cuenta no tiene acceso a Gemini Code Assist",
-      "forbidden_msg": "Cuenta prohibida, actualización automática omitida"
+      "forbidden_msg": "Cuenta prohibida, actualización automática omitida",
+      "needsReauth": "Verificación web requerida",
+      "needsReauthTooltip": "Google requiere verificación de seguridad web para continuar"
     },
     "tier": {
       "pro": "PRO​",
@@ -1614,7 +1617,12 @@
       "delete": "Eliminar",
       "deleteSelected": "Eliminar seleccionados",
       "export": "Exportar",
-      "refreshAll": "Actualizar todo"
+      "refreshAll": "Actualizar todo",
+      "reauth": "Reautorizar",
+      "reauthTooltip": "Google requiere reverificación, haga clic para reautorizar",
+      "openValidationUrl": "Verificación web",
+      "copyValidationUrl": "Copiar enlace de verificación",
+      "copyValidationUrlTooltip": "Copiar dirección de verificación web"
     },
     "tabs": {
       "oauth": "Autorización OAuth",

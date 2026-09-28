@@ -344,7 +344,8 @@
         "unlimited": "Hạn mức không giới hạn",
         "leftPercent": "Còn {{value}}%",
         "cachedRefreshFailed": "Làm mới thất bại; đang hiển thị dữ liệu thành công gần nhất",
-        "lastSuccessfulQuery": "Lần thành công gần nhất: {{time}}"
+        "lastSuccessfulQuery": "Lần thành công gần nhất: {{time}}",
+        "cachedNeedsReauth": "⚠️ Cần xác minh web để tiếp tục (dữ liệu lưu trong bộ nhớ đệm bên dưới)"
       },
       "subtitle": "Quản lý các tài khoản GitHub Copilot",
       "time": {
@@ -1479,7 +1480,9 @@
       "normal": "Bình thường",
       "forbidden": "403​",
       "forbidden_tooltip": "API trả về 403 Forbidden, tài khoản không có quyền sử dụng Gemini Code Assist",
-      "forbidden_msg": "Tài khoản không có quyền, đã bỏ qua tự động làm mới"
+      "forbidden_msg": "Tài khoản không có quyền, đã bỏ qua tự động làm mới",
+      "needsReauth": "Cần xác minh web",
+      "needsReauthTooltip": "Google yêu cầu xác minh bảo mật web để tiếp tục"
     },
     "tier": {
       "pro": "PRO​",
@@ -1614,7 +1617,12 @@
       "delete": "Xóa",
       "deleteSelected": "Xóa mục đã chọn",
       "export": "Xuất",
-      "refreshAll": "Làm mới tất cả"
+      "refreshAll": "Làm mới tất cả",
+      "reauth": "Cấp quyền lại",
+      "reauthTooltip": "Google yêu cầu xác minh lại, nhấn để cấp quyền lại",
+      "openValidationUrl": "Xác minh web",
+      "copyValidationUrl": "Sao chép liên kết xác minh",
+      "copyValidationUrlTooltip": "Sao chép địa chỉ xác minh web"
     },
     "tabs": {
       "oauth": "Ủy quyền OAuth",

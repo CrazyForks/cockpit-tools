@@ -356,7 +356,8 @@
         "unlimited": "Unlimited",
         "leftPercent": "{{value}}% left",
         "cachedRefreshFailed": "Refresh failed; showing the last successful data",
-        "lastSuccessfulQuery": "Last successful: {{time}}"
+        "lastSuccessfulQuery": "Last successful: {{time}}",
+        "cachedNeedsReauth": "⚠️ Web verification required to continue (cached data below)"
       },
       "subtitle": "Monitor quota status for all accounts in real time.",
       "time": {
@@ -1699,7 +1700,9 @@
       "normal": "Normal",
       "forbidden": "403",
       "forbidden_tooltip": "API returned 403 Forbidden, account has no access to Gemini Code Assist",
-      "forbidden_msg": "Account forbidden, skipped auto refresh"
+      "forbidden_msg": "Account forbidden, skipped auto refresh",
+      "needsReauth": "Web Verification Required",
+      "needsReauthTooltip": "Google requires web verification to continue"
     },
     "tier": {
       "pro": "PRO",
@@ -1834,7 +1837,12 @@
       "delete": "Delete",
       "deleteSelected": "Delete Selected",
       "export": "Export",
-      "refreshAll": "Refresh All"
+      "refreshAll": "Refresh All",
+      "reauth": "Re-authorize",
+      "reauthTooltip": "Google requires re-verification, click to re-authorize",
+      "openValidationUrl": "Web Verify",
+      "copyValidationUrl": "Copy Verification Link",
+      "copyValidationUrlTooltip": "Copy verification link"
     },
     "switchHistory": {
       "title": "Switch History",

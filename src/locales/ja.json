@@ -349,7 +349,8 @@
         "unlimited": "無制限",
         "leftPercent": "残り {{value}}%",
         "cachedRefreshFailed": "更新に失敗したため、最後に成功したデータを表示しています",
-        "lastSuccessfulQuery": "最終成功: {{time}}"
+        "lastSuccessfulQuery": "最終成功: {{time}}",
+        "cachedNeedsReauth": "⚠️ 続行するにはウェブ検証が必要です（以下は前回の成功データです）"
       },
       "subtitle": "GitHub Copilot アカウントを管理します",
       "time": {
@@ -1479,7 +1480,9 @@
       "normal": "通常",
       "forbidden": "403​",
       "forbidden_tooltip": "APIが403 Forbiddenを返しました。アカウントはGemini Code Assistにアクセスできません",
-      "forbidden_msg": "アカウント禁止、自動更新をスキップしました"
+      "forbidden_msg": "アカウント禁止、自動更新をスキップしました",
+      "needsReauth": "ウェブ検証が必要",
+      "needsReauthTooltip": "続行するにはGoogleによるウェブセキュリティ検証が必要です"
     },
     "tier": {
       "pro": "PRO​",
@@ -1614,7 +1617,12 @@
       "delete": "削除",
       "deleteSelected": "選択項目を削除",
       "export": "エクスポート",
-      "refreshAll": "すべて更新"
+      "refreshAll": "すべて更新",
+      "reauth": "再認証",
+      "reauthTooltip": "Googleが再検証を要求しています。クリックして再認証してください",
+      "openValidationUrl": "ウェブ検証",
+      "copyValidationUrl": "検証リンクをコピー",
+      "copyValidationUrlTooltip": "ウェブ検証アドレスをコピー"
     },
     "tabs": {
       "oauth": "OAuth 認証",

@@ -349,7 +349,8 @@
         "unlimited": "Unbegrenztes Kontingent",
         "leftPercent": "{{value}} % übrig",
         "cachedRefreshFailed": "Aktualisierung fehlgeschlagen; letzte erfolgreiche Daten werden angezeigt",
-        "lastSuccessfulQuery": "Letzter Erfolg: {{time}}"
+        "lastSuccessfulQuery": "Letzter Erfolg: {{time}}",
+        "cachedNeedsReauth": "⚠️ Web-Verifizierung erforderlich zum Fortfahren (unten zwischengespeicherte Daten)"
       },
       "subtitle": "Verwalte deine GitHub Copilot-Konten",
       "time": {
@@ -1479,7 +1480,9 @@
       "normal": "Normal​",
       "forbidden": "403​",
       "forbidden_tooltip": "API gab 403 Forbidden zurück, Konto hat keinen Zugriff auf Gemini Code Assist",
-      "forbidden_msg": "Konto verboten, automatische Aktualisierung übersprungen"
+      "forbidden_msg": "Konto verboten, automatische Aktualisierung übersprungen",
+      "needsReauth": "Web-Verifizierung erforderlich",
+      "needsReauthTooltip": "Google erfordert eine Web-Sicherheitsüberprüfung zum Fortfahren"
     },
     "tier": {
       "pro": "PRO​",
@@ -1614,7 +1617,12 @@
       "delete": "Löschen",
       "deleteSelected": "Ausgewählte löschen",
       "export": "Exportieren",
-      "refreshAll": "Alle aktualisieren"
+      "refreshAll": "Alle aktualisieren",
+      "reauth": "Erneut autorisieren",
+      "reauthTooltip": "Google erfordert erneute Verifizierung, klicken Sie zum Autorisieren",
+      "openValidationUrl": "Web-Verifizierung",
+      "copyValidationUrl": "Bestätigungslink kopieren",
+      "copyValidationUrlTooltip": "Web-Bestätigungsadresse kopieren"
     },
     "tabs": {
       "oauth": "OAuth-Autorisierung",

@@ -349,7 +349,8 @@
         "unlimited": "무제한 할당량",
         "leftPercent": "{{value}}% 남음",
         "cachedRefreshFailed": "새로고침 실패; 마지막으로 성공한 데이터를 표시합니다",
-        "lastSuccessfulQuery": "마지막 성공: {{time}}"
+        "lastSuccessfulQuery": "마지막 성공: {{time}}",
+        "cachedNeedsReauth": "⚠️ 계속하려면 웹 인증이 필요합니다(아래는 마지막 성공 데이터입니다)"
       },
       "subtitle": "GitHub Copilot 계정을 관리합니다",
       "time": {
@@ -1479,7 +1480,9 @@
       "normal": "정상",
       "forbidden": "403​",
       "forbidden_tooltip": "API가 403 Forbidden을 반환했습니다. 계정이 Gemini Code Assist에 접근할 수 없습니다",
-      "forbidden_msg": "계정 금지됨, 자동 새로고침 건너뜀"
+      "forbidden_msg": "계정 금지됨, 자동 새로고침 건너뜀",
+      "needsReauth": "웹 인증 필요",
+      "needsReauthTooltip": "계속 사용하려면 Google 웹 보안 인증이 필요합니다"
     },
     "tier": {
       "pro": "PRO​",
@@ -1614,7 +1617,12 @@
       "delete": "삭제",
       "deleteSelected": "선택 항목 삭제",
       "export": "내보내기",
-      "refreshAll": "전체 새로고침"
+      "refreshAll": "전체 새로고침",
+      "reauth": "재인증",
+      "reauthTooltip": "Google에서 재인증을 요구합니다. 클릭하여 재인증하세요",
+      "openValidationUrl": "웹 인증",
+      "copyValidationUrl": "인증 링크 복사",
+      "copyValidationUrlTooltip": "웹 인증 주소 복사"
     },
     "tabs": {
       "oauth": "OAuth 인증",
