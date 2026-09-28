@@ -2341,7 +2341,9 @@ pub async fn fetch_quota_with_fresh_token(
                 code: err.code,
                 message: err.message.clone(),
                 reason: err.reason.clone(),
-                validation_url: err.validation_url.clone(),
+                validation_url: err.validation_url.as_deref().map(|u| {
+                    crate::modules::quota::format_google_validation_url(u, &account.email)
+                }),
                 timestamp: chrono::Utc::now().timestamp(),
             });
 

@@ -397,7 +397,50 @@ pub struct QuotaFetchError {
     pub validation_url: Option<String>,
 }
 
+pub fn format_google_validation_url(raw_url: &str, email: &str) -> String {
+    let email = email.trim();
+    if raw_url.trim().is_empty() || email.is_empty() {
+        return raw_url.to_string();
+    }
+
+    if !raw_url.contains("accounts.google.com") && !raw_url.contains("google.com") {
+        return raw_url.to_string();
+    }
+
+    match url::Url::parse(raw_url) {
+        Ok(mut parsed) => {
+            let mut pairs: Vec<(String, String)> = parsed.query_pairs().into_owned().collect();
+            let has_valid_authuser = pairs.iter().any(|(k, v)| {
+                k == "authuser" && !v.trim().is_empty() && !v.trim().chars().all(|c| c.is_ascii_digit())
+            });
+            let has_login_hint = pairs.iter().any(|(k, v)| k == "login_hint" && !v.trim().is_empty());
+            let has_email = pairs.iter().any(|(k, v)| k == "Email" && !v.trim().is_empty());
+
+            if !has_valid_authuser {
+                pairs.retain(|(k, _)| k != "authuser");
+                pairs.push(("authuser".to_string(), email.to_string()));
+            }
+            if !has_login_hint {
+                pairs.retain(|(k, _)| k != "login_hint");
+                pairs.push(("login_hint".to_string(), email.to_string()));
+            }
+            if !has_email {
+                pairs.retain(|(k, _)| k != "Email");
+                pairs.push(("Email".to_string(), email.to_string()));
+            }
+
+            parsed.query_pairs_mut().clear().extend_pairs(pairs);
+            parsed.to_string()
+        }
+        Err(_) => raw_url.to_string(),
+    }
+}
+
 pub fn parse_google_api_error(status: u16, text: &str) -> QuotaFetchError {
+    parse_google_api_error_with_email(status, text, None)
+}
+
+pub fn parse_google_api_error_with_email(status: u16, text: &str, email: Option<&str>) -> QuotaFetchError {
     let mut message = if text.trim().is_empty() {
         format!("API returned status {}", status)
     } else {
@@ -435,6 +478,12 @@ pub fn parse_google_api_error(status: u16, text: &str) -> QuotaFetchError {
             reason = Some("VALIDATION_REQUIRED".to_string());
         } else if message.contains("Subscription required") {
             reason = Some("SUBSCRIPTION_REQUIRED".to_string());
+        }
+    }
+
+    if let Some(url) = validation_url.as_ref() {
+        if let Some(email) = email {
+            validation_url = Some(format_google_validation_url(url, email));
         }
     }
 
@@ -1253,7 +1302,7 @@ pub async fn fetch_quota_with_context(
                         q.subscription_tier = subscription_tier.clone();
                         q.is_gcp_tos = is_gcp_tos;
                         q.project_id = resolved_project_id.clone();
-                        let parsed_error = parse_google_api_error(status.as_u16(), &text);
+                        let parsed_error = parse_google_api_error_with_email(status.as_u16(), &text, Some(email));
                         return Ok(QuotaFetchResult {
                             quota: q,
                             error: Some(parsed_error),
@@ -1332,7 +1381,7 @@ pub async fn fetch_quota_with_context(
                                 "[Quota] retrieveUserQuotaSummary 请求未成功: {}, body: {}",
                                 status, err_text
                             ));
-                            quota_summary_error = Some(parse_google_api_error(status.as_u16(), &err_text));
+                            quota_summary_error = Some(parse_google_api_error_with_email(status.as_u16(), &err_text, Some(email)));
                         }
                     }
                     Err(e) => {
@@ -1385,3 +1434,53 @@ pub async fn fetch_quota_with_context(
 
     Err(AppError::Unknown("配额查询失败".to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_google_validation_url_empty_authuser() {
+        let raw = "https://accounts.google.com/signin/continue?sarp=1&scc=1&continue=https%3A%2F%2Fdevelopers.google.com%2Fgemini-code-assist%2Fauth%2Fauth_success_gemini&plt=AKgnsbtp&flowName=GlifWebSignIn&authuser";
+        let email = "target@gmail.com";
+        let formatted = format_google_validation_url(raw, email);
+
+        let parsed = url::Url::parse(&formatted).unwrap();
+        let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(pairs.get("authuser").map(|s| s.as_str()), Some("target@gmail.com"));
+        assert_eq!(pairs.get("login_hint").map(|s| s.as_str()), Some("target@gmail.com"));
+        assert_eq!(pairs.get("Email").map(|s| s.as_str()), Some("target@gmail.com"));
+        assert_eq!(pairs.get("plt").map(|s| s.as_str()), Some("AKgnsbtp"));
+    }
+
+    #[test]
+    fn test_format_google_validation_url_numeric_authuser() {
+        let raw = "https://accounts.google.com/signin/continue?authuser=0&continue=https%3A%2F%2Fdevelopers.google.com";
+        let formatted = format_google_validation_url(raw, "target@gmail.com");
+
+        let parsed = url::Url::parse(&formatted).unwrap();
+        let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(pairs.get("authuser").map(|s| s.as_str()), Some("target@gmail.com"));
+        assert_eq!(pairs.get("login_hint").map(|s| s.as_str()), Some("target@gmail.com"));
+        assert_eq!(pairs.get("Email").map(|s| s.as_str()), Some("target@gmail.com"));
+    }
+
+    #[test]
+    fn test_format_google_validation_url_preserves_valid_email() {
+        let raw = "https://accounts.google.com/signin/continue?authuser=existing%40gmail.com&continue=https%3A%2F%2Fdevelopers.google.com";
+        let formatted = format_google_validation_url(raw, "target@gmail.com");
+
+        let parsed = url::Url::parse(&formatted).unwrap();
+        let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(pairs.get("authuser").map(|s| s.as_str()), Some("existing@gmail.com"));
+        assert_eq!(pairs.get("login_hint").map(|s| s.as_str()), Some("target@gmail.com"));
+    }
+
+    #[test]
+    fn test_format_google_validation_url_ignores_non_google_or_empty() {
+        let raw = "https://example.com/verify?code=123";
+        assert_eq!(format_google_validation_url(raw, "target@gmail.com"), raw);
+        assert_eq!(format_google_validation_url(raw, ""), raw);
+    }
+}
+

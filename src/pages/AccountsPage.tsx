@@ -28,6 +28,7 @@ import { Page } from '../types/navigation'
 import {
   getAntigravityTierBadge,
 } from '../utils/account'
+import { formatGoogleValidationUrl } from '../utils/googleValidationUrl'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
@@ -235,14 +236,20 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
   }, [verificationStatusMap, t])
 
   const resolveValidationUrl = useCallback((account: Account) => {
-    if (account.quota_error?.validation_url) return account.quota_error.validation_url
-    const vDetail = verificationDetailMap[account.id]
-    if (vDetail?.validationUrl) return vDetail.validationUrl
-    if (account.quota_error?.message) {
-      const match = account.quota_error.message.match(/https?:\/\/[^\s"'\)]+/)
-      if (match) return match[0]
+    let rawUrl: string | null = null
+    if (account.quota_error?.validation_url) {
+      rawUrl = account.quota_error.validation_url
+    } else {
+      const vDetail = verificationDetailMap[account.id]
+      if (vDetail?.validationUrl) {
+        rawUrl = vDetail.validationUrl
+      } else if (account.quota_error?.message) {
+        const match = account.quota_error.message.match(/https?:\/\/[^\s"'\)]+/)
+        if (match) rawUrl = match[0]
+      }
     }
-    return null
+    if (!rawUrl) return null
+    return formatGoogleValidationUrl(rawUrl, account.email)
   }, [verificationDetailMap])
 
   const [copiedValidationUrlAccountId, setCopiedValidationUrlAccountId] = useState<string | null>(null)
