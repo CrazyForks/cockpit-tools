@@ -248,6 +248,17 @@ pub fn load_account(account_id: &str) -> Result<Account, String> {
             }
         }
     }
+    // 同步：若 quota_error 明确要求网页验证，确保 disabled_reason 同步为 verification_required
+    if account.disabled_reason.is_none() {
+        if let Some(ref err) = account.quota_error {
+            if err.reason.as_deref() == Some("VALIDATION_REQUIRED")
+                || err.validation_url.is_some()
+                || err.message.contains("Verify your account")
+            {
+                account.disabled_reason = Some("verification_required".to_string());
+            }
+        }
+    }
     Ok(account)
 }
 
@@ -1777,15 +1788,15 @@ pub async fn fetch_quota_with_fresh_token(
                 ));
                 account.clear_disabled();
             }
-            account.quota_error = payload.error.as_ref().map(|err| QuotaErrorInfo {
-                code: err.code,
-                message: err.message.clone(),
-                reason: err.reason.clone(),
-                validation_url: err.validation_url.clone(),
-                timestamp: chrono::Utc::now().timestamp(),
-            });
-
             if let Some(ref err) = payload.error {
+                account.quota_error = Some(QuotaErrorInfo {
+                    code: err.code,
+                    message: err.message.clone(),
+                    reason: err.reason.clone(),
+                    validation_url: err.validation_url.clone(),
+                    timestamp: chrono::Utc::now().timestamp(),
+                });
+
                 if err.reason.as_deref() == Some("VALIDATION_REQUIRED")
                     || err.message.contains("Verify your account")
                 {
@@ -1802,6 +1813,7 @@ pub async fn fetch_quota_with_fresh_token(
                     account.disabled_reason = Some("subscription_required".to_string());
                 }
             } else {
+                account.quota_error = None;
                 // 配额获取成功且无部分错误，如果之前是 verification_required / subscription_required，自动解除
                 if account.disabled_reason.as_deref() == Some("verification_required")
                     || account.disabled_reason.as_deref() == Some("subscription_required")

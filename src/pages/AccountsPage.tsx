@@ -3046,7 +3046,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
               </div>
             ) : (
               <>
-                {hasQuotaError && (
+                {hasQuotaError && !isAccountNeedsReauth(account, verificationStatusMap) && (
                   <div className="quota-empty" title={quotaError?.message}>
                     {t('common.shared.quota.queryFailed', '配额查询失败')}
                   </div>
@@ -3679,7 +3679,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                 </div>
               ) : (
                 <>
-                  {hasQuotaError && (
+                  {hasQuotaError && !isAccountNeedsReauth(account, verificationStatusMap) && (
                     <div className="quota-empty" title={quotaError?.message}>
                       {t('common.shared.quota.queryFailed', '配额查询失败')}
                     </div>
