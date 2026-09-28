@@ -203,15 +203,6 @@ pub async fn add_account(refresh_token: String) -> Result<models::Account, Strin
 }
 
 #[tauri::command]
-pub async fn deduplicate_accounts() -> Result<usize, String> {
-    let count = modules::account::deduplicate_accounts()?;
-    if count > 0 {
-        modules::websocket::broadcast_data_changed("accounts_deduplicated");
-    }
-    Ok(count)
-}
-
-#[tauri::command]
 pub fn create_pending_oauth_account(
     email: String,
     note: Option<String>,

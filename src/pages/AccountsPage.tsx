@@ -169,8 +169,6 @@ type AntigravitySwitchHistoryItem = accountService.AntigravitySwitchHistoryItem
 
 export type { AccountsFilterType } from './antigravityAccountOverviewModel';
 
-let deduplicateCheckedThisSession = false;
-
 export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
   const { t, i18n } = useTranslation()
   const antigravityRuntimeTarget = useAntigravityRuntimeTarget()
@@ -440,17 +438,6 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
   // 标签编辑弹窗
   const [showTagModal, setShowTagModal] = useState<string | null>(null)
 
-  // 同邮箱重复账号合并确认弹窗
-  const [duplicateMergeModalOpen, setDuplicateMergeModalOpen] = useState(false)
-  const [duplicateMergeCount, setDuplicateMergeCount] = useState(0)
-  const [duplicateMergeRemember, setDuplicateMergeRemember] = useState(true)
-  const [duplicateMerging, setDuplicateMerging] = useState(false)
-
-  const handleCancelDuplicateMerge = useCallback(() => {
-    localStorage.setItem('agtools.antigravity.auto_merge_duplicates.prompted', 'true')
-    setDuplicateMergeModalOpen(false)
-  }, [])
-
   // 账号备注弹窗
   const [editingAccountNoteId, setEditingAccountNoteId] = useState<string | null>(null)
   const [oauthAccountNoteMode, setOauthAccountNoteMode] = useState(false)
@@ -583,30 +570,6 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     },
     [grouping.groups],
   )
-
-  const handleConfirmDuplicateMerge = useCallback(async () => {
-    setDuplicateMerging(true)
-    try {
-      if (duplicateMergeRemember) {
-        await invoke('patch_general_config', {
-          updates: { antigravity_auto_merge_duplicates: true },
-        }).catch((err) => console.error('Failed to save auto merge config:', err))
-      }
-      localStorage.setItem('agtools.antigravity.auto_merge_duplicates.prompted', 'true')
-      const merged = await accountService.deduplicateAccounts()
-      if (merged > 0) {
-        await fetchAccounts()
-        void grouping.reloadGroups()
-      }
-      setDuplicateMergeModalOpen(false)
-    } catch (e) {
-      console.error('Failed to deduplicate accounts:', e)
-    } finally {
-      setDuplicateMerging(false)
-    }
-  }, [duplicateMergeRemember, fetchAccounts, grouping])
-
-  useEscClose(duplicateMergeModalOpen && !duplicateMerging, handleCancelDuplicateMerge)
 
   const assignAccountsToAddTargetGroup = useCallback(
     async (
@@ -859,7 +822,6 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
         resetOverviewFilters()
       }
       setPrivacyModeEnabled(isPrivacyModeEnabledByDefault())
-      deduplicateCheckedThisSession = false
       void fetchAccounts()
     }
 
@@ -1513,60 +1475,6 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showColorPicker])
-
-  // 检查同邮箱重复账号：若已开启设置则自动合并，若未开启且首次发现则弹窗确认
-  useEffect(() => {
-    if (loading || accounts.length === 0) return
-    if (deduplicateCheckedThisSession) return
-
-    const emailCounts = new Map<string, number>()
-    for (const acc of accounts) {
-      const email = acc.email?.trim().toLowerCase()
-      if (email) {
-        emailCounts.set(email, (emailCounts.get(email) || 0) + 1)
-      }
-    }
-    let dupCount = 0
-    for (const count of emailCounts.values()) {
-      if (count > 1) {
-        dupCount += count - 1
-      }
-    }
-
-    if (dupCount === 0) {
-      deduplicateCheckedThisSession = true
-      return
-    }
-
-    invoke<{ antigravity_auto_merge_duplicates?: boolean }>('get_general_config')
-      .then(async (config) => {
-        if (config?.antigravity_auto_merge_duplicates) {
-          deduplicateCheckedThisSession = true
-          try {
-            const merged = await accountService.deduplicateAccounts()
-            if (merged > 0) {
-              await fetchAccounts()
-              void grouping.reloadGroups()
-            }
-          } catch (e) {
-            console.error('[AccountsPage] auto merge accounts failed:', e)
-          }
-          return
-        }
-
-        const prompted = localStorage.getItem('agtools.antigravity.auto_merge_duplicates.prompted')
-        if (!prompted) {
-          deduplicateCheckedThisSession = true
-          setDuplicateMergeCount(dupCount)
-          setDuplicateMergeModalOpen(true)
-        } else {
-          deduplicateCheckedThisSession = true
-        }
-      })
-      .catch((err) => {
-        console.error('Failed to check duplicate merge preference:', err)
-      })
-  }, [accounts, loading, fetchAccounts, grouping])
 
   useEffect(() => {
     let unlistenUrl: UnlistenFn | undefined
@@ -3787,10 +3695,6 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     deletingTag,
     displayGroups,
     draggedCustomSortAccountId,
-    duplicateMergeCount,
-    duplicateMergeModalOpen,
-    duplicateMergeRemember,
-    duplicateMerging,
     editingAccountNoteAccount,
     exportAccountIdsRef,
     exporting,
@@ -3812,9 +3716,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     getVerificationBadge,
     groupByTag,
     handleBatchDelete,
-    handleCancelDuplicateMerge,
     handleClearSwitchHistory,
-    handleConfirmDuplicateMerge,
     handleCopyOauthUrl,
     handleCustomSortDragMove,
     handleCustomSortDragStart,
@@ -3889,7 +3791,6 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     setAddTab,
     setDeleteConfirm,
     setDeleteConfirmError,
-    setDuplicateMergeRemember,
     setFileCorruptedError,
     setGroupByTag,
     setIncludeExportSensitiveNotes,

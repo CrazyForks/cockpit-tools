@@ -67,10 +67,6 @@ export function AccountsOverviewView(props: AccountsOverviewViewProps) {
     deletingTag,
     displayGroups,
     draggedCustomSortAccountId,
-    duplicateMergeCount,
-    duplicateMergeModalOpen,
-    duplicateMergeRemember,
-    duplicateMerging,
     editingAccountNoteAccount,
     exportAccountIdsRef,
     exporting,
@@ -91,9 +87,7 @@ export function AccountsOverviewView(props: AccountsOverviewViewProps) {
     getQuotaDisplayItems,
     groupByTag,
     handleBatchDelete,
-    handleCancelDuplicateMerge,
     handleClearSwitchHistory,
-    handleConfirmDuplicateMerge,
     handleCopyOauthUrl,
     handleCustomSortDragMove,
     handleCustomSortDragStart,
@@ -165,7 +159,6 @@ export function AccountsOverviewView(props: AccountsOverviewViewProps) {
     setAddTab,
     setDeleteConfirm,
     setDeleteConfirmError,
-    setDuplicateMergeRemember,
     setFileCorruptedError,
     setGroupByTag,
     setIncludeExportSensitiveNotes,
@@ -1364,88 +1357,6 @@ export function AccountsOverviewView(props: AccountsOverviewViewProps) {
                 disabled={deletingTag}
               >
                 {deletingTag ? '处理中...' : t('common.confirm')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {duplicateMergeModalOpen && (
-        <div
-          className="modal-overlay"
-          onClick={() => !duplicateMerging && handleCancelDuplicateMerge()}
-        >
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
-            <div className="modal-header">
-              <h2>{t('accounts.duplicateMergeModal.title', '检测到同邮箱重复账号')}</h2>
-              <button
-                className="modal-close"
-                onClick={handleCancelDuplicateMerge}
-                disabled={duplicateMerging}
-                aria-label={t('common.close', '关闭')}
-              >
-                <X />
-              </button>
-            </div>
-            <div className="modal-body">
-              <p style={{ marginBottom: '12px', fontSize: '14px', lineHeight: 1.6, color: 'var(--text-primary)' }}>
-                {t(
-                  'accounts.duplicateMergeModal.desc',
-                  '检测到当前列表中存在 {{count}} 个同邮箱的重复账号卡片。是否自动合并同邮箱账号？',
-                  { count: duplicateMergeCount }
-                )}
-              </p>
-              <div
-                style={{
-                  background: 'var(--bg-secondary)',
-                  padding: '12px 14px',
-                  borderRadius: '8px',
-                  marginBottom: '16px',
-                  fontSize: '13px',
-                  color: 'var(--text-secondary)',
-                  lineHeight: 1.6,
-                }}
-              >
-                <div>• {t('accounts.duplicateMergeModal.point1', '保留最新的有效授权凭据，并自动整合补充备注、标签等信息')}</div>
-                <div>• {t('accounts.duplicateMergeModal.point2', '合并成功后自动清理历史多余卡片，保持列表整洁')}</div>
-                <div>• {t('accounts.duplicateMergeModal.point3', '此开关可随时在「设置 - Antigravity IDE 设置」中修改')}</div>
-              </div>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  fontSize: '13px',
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                  color: 'var(--text-primary)',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={duplicateMergeRemember}
-                  onChange={(e) => setDuplicateMergeRemember(e.target.checked)}
-                  disabled={duplicateMerging}
-                />
-                <span>{t('accounts.duplicateMergeModal.remember', '记住我的选择（以后自动合并）')}</span>
-              </label>
-            </div>
-            <div className="modal-footer">
-              <button
-                className="btn btn-secondary"
-                onClick={handleCancelDuplicateMerge}
-                disabled={duplicateMerging}
-              >
-                {t('accounts.duplicateMergeModal.cancel', '暂不合并')}
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleConfirmDuplicateMerge}
-                disabled={duplicateMerging}
-              >
-                {duplicateMerging
-                  ? t('common.loading', '合并中...')
-                  : t('accounts.duplicateMergeModal.confirm', '确认合并')}
               </button>
             </div>
           </div>

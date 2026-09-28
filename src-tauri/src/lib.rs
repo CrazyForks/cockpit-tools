@@ -791,7 +791,6 @@ pub fn run() {
             // Account Commands
             commands::account::list_accounts,
             commands::account::add_account,
-            commands::account::deduplicate_accounts,
             commands::account::create_pending_oauth_account,
             commands::account::delete_account,
             commands::account::delete_accounts,
