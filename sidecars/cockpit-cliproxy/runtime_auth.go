@@ -592,10 +592,15 @@ func (r *sidecarRuntime) ExecuteStream(ctx context.Context, providers []string, 
 }
 
 func (r *sidecarRuntime) Stop() {
-	if r == nil || r.cancel == nil {
+	if r == nil {
 		return
 	}
-	r.cancel()
+	if r.cancel != nil {
+		r.cancel()
+	}
+	if r.service != nil {
+		_ = r.service.Shutdown(context.Background())
+	}
 	if r.done == nil {
 		return
 	}
