@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useModalScrollLock } from "../hooks/useModalScrollLock";
 import "./CodexAccountDialogs.css";
-import { Plus, RefreshCw, Download, Upload, Trash2, X, Globe, KeyRound, Power, Copy, Check, Play, Pause, RotateCw, CircleAlert, Info, Rows3, LayoutGrid, List, Search, ArrowDownWideNarrow, ArrowUp, ArrowDown, GripVertical, Clock, Tag, Star, Eye, EyeOff, BookOpen, FileText, ExternalLink, FolderOpen, FolderPlus, ChevronRight, LogOut, Terminal, ChevronDown } from "lucide-react";
+import { Plus, RefreshCw, Upload, Trash2, X, Globe, KeyRound, Power, Copy, Check, Play, Pause, RotateCw, CircleAlert, Info, Rows3, LayoutGrid, List, Search, ArrowDownWideNarrow, ArrowUp, ArrowDown, GripVertical, Clock, Tag, Star, Eye, EyeOff, BookOpen, FileText, ExternalLink, FolderOpen, FolderPlus, LogOut, Terminal, ChevronDown } from "lucide-react";
 import * as codexLocalAccessService from "../services/codexLocalAccessService";
 import { TagEditModal } from "../components/TagEditModal";
 import { ExportJsonModal } from "../components/ExportJsonModal";
@@ -698,24 +698,6 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
                     <Power size={14} />
                     <span>
                       {t("codex.wakeup.fullQuotaAction", "唤醒账号")}
-                    </span>
-                  </button>
-                )}
-                {authFailedExportAccountIds.length > 0 && (
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={handleExportAuthFailedAccounts}
-                    disabled={exporting}
-                    title={t(
-                      "codex.exportAuthFailedTitle",
-                      "导出全部授权失败账号",
-                    )}
-                  >
-                    <Download size={14} />
-                    <span>
-                      {t("codex.exportAuthFailed", "导出失败账号")}
-                      {` (${authFailedExportAccountIds.length})`}
                     </span>
                   </button>
                 )}
