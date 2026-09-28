@@ -1120,75 +1120,76 @@ pub async fn fetch_quota_with_context(
                     .map_err(|e| AppError::Unknown(format!("API 响应解析失败: {}", e)))?;
 
                 // Fetch retrieveUserQuotaSummary to get weekly and 5h buckets
-                let summary_url = format!("{}/v1internal:retrieveUserQuotaSummary", base_url);
+                // 免费账号无 retrieveUserQuotaSummary 权限（Google 返回 403 SUBSCRIPTION_REQUIRED），直接跳过避免多余请求与误报
+                let is_free_tier = subscription_tier
+                    .as_deref()
+                    .map(str::to_lowercase)
+                    .map(|s| s.contains("free") || (!s.contains("pro") && !s.contains("ultra")))
+                    .unwrap_or(false);
+
                 let mut quota_summary_val: Option<serde_json::Value> = None;
-                let mut quota_summary_error: Option<QuotaFetchError> = None;
-                crate::modules::logger::log_info(&format!(
-                    "[Quota] 发送 retrieveUserQuotaSummary, url: {}",
-                    summary_url
-                ));
-                match client
-                    .post(&summary_url)
-                    .bearer_auth(access_token)
-                    .header(reqwest::header::USER_AGENT, &cloud_code_user_agent)
-                    .header(reqwest::header::ACCEPT_ENCODING, "gzip")
-                    .json(&payload)
-                    .send()
-                    .await
-                {
-                    Ok(res) => {
-                        let status = res.status();
-                        crate::modules::logger::log_info(&format!(
-                            "[Quota] retrieveUserQuotaSummary 返回状态码: {}",
-                            status
-                        ));
-                        if status.is_success() {
-                            if let Ok(summary_body) = res.text().await {
-                                crate::modules::logger::log_info(&format!(
-                                    "[Quota] retrieveUserQuotaSummary 响应长度: {}",
-                                    summary_body.len()
-                                ));
-                                if let Ok(val) =
-                                    serde_json::from_str::<serde_json::Value>(&summary_body)
-                                {
-                                    quota_summary_val = Some(val.clone());
-                                    // Merge into payload_value for caching
-                                    if let Some(obj) = payload_value.as_object_mut() {
-                                        obj.insert("quota_summary".to_string(), val);
-                                        crate::modules::logger::log_info(
-                                            "[Quota] 成功将 quota_summary 合并到 payload_value",
+                if !is_free_tier {
+                    let summary_url = format!("{}/v1internal:retrieveUserQuotaSummary", base_url);
+                    crate::modules::logger::log_info(&format!(
+                        "[Quota] 发送 retrieveUserQuotaSummary, url: {}",
+                        summary_url
+                    ));
+                    match client
+                        .post(&summary_url)
+                        .bearer_auth(access_token)
+                        .header(reqwest::header::USER_AGENT, &cloud_code_user_agent)
+                        .header(reqwest::header::ACCEPT_ENCODING, "gzip")
+                        .json(&payload)
+                        .send()
+                        .await
+                    {
+                        Ok(res) => {
+                            let status = res.status();
+                            crate::modules::logger::log_info(&format!(
+                                "[Quota] retrieveUserQuotaSummary 返回状态码: {}",
+                                status
+                            ));
+                            if status.is_success() {
+                                if let Ok(summary_body) = res.text().await {
+                                    crate::modules::logger::log_info(&format!(
+                                        "[Quota] retrieveUserQuotaSummary 响应长度: {}",
+                                        summary_body.len()
+                                    ));
+                                    if let Ok(val) =
+                                        serde_json::from_str::<serde_json::Value>(&summary_body)
+                                    {
+                                        quota_summary_val = Some(val.clone());
+                                        // Merge into payload_value for caching
+                                        if let Some(obj) = payload_value.as_object_mut() {
+                                            obj.insert("quota_summary".to_string(), val);
+                                            crate::modules::logger::log_info(
+                                                "[Quota] 成功将 quota_summary 合并到 payload_value",
+                                            );
+                                        }
+                                    } else {
+                                        crate::modules::logger::log_error(
+                                            "[Quota] retrieveUserQuotaSummary JSON 解析失败",
                                         );
                                     }
                                 } else {
                                     crate::modules::logger::log_error(
-                                        "[Quota] retrieveUserQuotaSummary JSON 解析失败",
+                                        "[Quota] retrieveUserQuotaSummary 读取 body 失败",
                                     );
                                 }
                             } else {
-                                crate::modules::logger::log_error(
-                                    "[Quota] retrieveUserQuotaSummary 读取 body 失败",
-                                );
+                                let err_text = res.text().await.unwrap_or_default();
+                                crate::modules::logger::log_warn(&format!(
+                                    "[Quota] retrieveUserQuotaSummary 请求未成功: {}, body: {}",
+                                    status, err_text
+                                ));
                             }
-                        } else {
-                            let err_text = res.text().await.unwrap_or_default();
-                            crate::modules::logger::log_error(&format!(
-                                "[Quota] retrieveUserQuotaSummary 请求未成功: {}, body: {}",
-                                status, err_text
-                            ));
-                            quota_summary_error = Some(parse_google_api_error(status.as_u16(), &err_text));
                         }
-                    }
-                    Err(e) => {
-                        crate::modules::logger::log_error(&format!(
-                            "[Quota] retrieveUserQuotaSummary 发送失败: {}",
-                            e
-                        ));
-                        quota_summary_error = Some(QuotaFetchError {
-                            code: None,
-                            message: format!("retrieveUserQuotaSummary 发送失败: {}", e),
-                            reason: None,
-                            validation_url: None,
-                        });
+                        Err(e) => {
+                            crate::modules::logger::log_warn(&format!(
+                                "[Quota] retrieveUserQuotaSummary 发送失败: {}",
+                                e
+                            ));
+                        }
                     }
                 }
 
@@ -1211,7 +1212,7 @@ pub async fn fetch_quota_with_context(
 
                 return Ok(QuotaFetchResult {
                     quota: quota_data,
-                    error: quota_summary_error,
+                    error: None,
                 });
             }
             Err(e) => {

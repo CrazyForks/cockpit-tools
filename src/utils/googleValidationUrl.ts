@@ -7,13 +7,18 @@ export function formatGoogleValidationUrl(url: string, email?: string | null): s
   const trimmedEmail = email.trim()
   if (!trimmedEmail) return url
 
-  // 仅针对 Google 验证/登录域名的链接进行参数补充
-  if (!url.includes('accounts.google.com') && !url.includes('google.com')) {
-    return url
-  }
-
   try {
     const u = new URL(url)
+    const hostname = u.hostname.toLowerCase()
+    const isGoogleHost =
+      hostname === 'accounts.google.com' ||
+      hostname === 'google.com' ||
+      hostname.endsWith('.google.com')
+
+    if (!isGoogleHost) {
+      return url
+    }
+
     // 若 authuser 为空串、不存在或为数字索引（如 0），设置为目标账号 email
     const existingAuthUser = u.searchParams.get('authuser')
     if (!existingAuthUser || existingAuthUser.trim() === '' || /^\d+$/.test(existingAuthUser.trim())) {

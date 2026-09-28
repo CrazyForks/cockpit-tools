@@ -50,4 +50,10 @@ test('formatGoogleValidationUrl returns original url if email is empty or null',
 test('formatGoogleValidationUrl does not modify non-google urls', () => {
   const raw = 'https://example.com/verify?code=123';
   assert.equal(formatGoogleValidationUrl(raw, 'target@gmail.com'), raw);
+
+  const fakeHost = 'https://evil-google.com/signin?authuser';
+  assert.equal(formatGoogleValidationUrl(fakeHost, 'target@gmail.com'), fakeHost);
+
+  const querySubstr = 'https://attacker.com/login?redirect=accounts.google.com&authuser';
+  assert.equal(formatGoogleValidationUrl(querySubstr, 'target@gmail.com'), querySubstr);
 });

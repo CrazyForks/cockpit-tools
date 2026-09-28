@@ -2875,7 +2875,12 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       const isForbidden = Boolean(account.quota?.is_forbidden)
       const isSelected = selected.has(account.id)
       const quotaError = account.quota_error
-      const hasQuotaError = Boolean(quotaError?.message)
+      const hasValidModels = Boolean(account.quota?.models && account.quota.models.length > 0)
+      const isSpuriousSubscriptionError =
+        hasValidModels &&
+        (quotaError?.reason === 'SUBSCRIPTION_REQUIRED' ||
+          Boolean(quotaError?.message?.includes('valid license')))
+      const hasQuotaError = Boolean(quotaError?.message) && !isSpuriousSubscriptionError
       const accountTags = (account.tags || []).map((tag) => tag.trim()).filter(Boolean)
       const visibleTags = accountTags.slice(0, 2)
       const moreTagCount = Math.max(0, accountTags.length - visibleTags.length)
@@ -2889,7 +2894,11 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       const disabledTitle = isDisabled
         ? `${t('accounts.status.disabled')}${account.disabled_reason ? `: ${account.disabled_reason}` : ''}`
         : ''
-      const verificationReason = account.disabled_reason || verificationStatusMap[account.id]
+      const rawVerificationReason = account.disabled_reason || verificationStatusMap[account.id]
+      const verificationReason =
+        rawVerificationReason === 'subscription_required' && hasValidModels
+          ? undefined
+          : rawVerificationReason
       const hasVerificationIssue = verificationReason === 'verification_required' || verificationReason === 'tos_violation'
 
       const hasModels = account.quota?.models && account.quota.models.length > 0
@@ -3513,7 +3522,12 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       const availableCreditsDisplay = getAvailableAICreditsDisplay(account)
       const isForbidden = Boolean(account.quota?.is_forbidden)
       const quotaError = account.quota_error
-      const hasQuotaError = Boolean(quotaError?.message)
+      const hasValidModels = Boolean(account.quota?.models && account.quota.models.length > 0)
+      const isSpuriousSubscriptionError =
+        hasValidModels &&
+        (quotaError?.reason === 'SUBSCRIPTION_REQUIRED' ||
+          Boolean(quotaError?.message?.includes('valid license')))
+      const hasQuotaError = Boolean(quotaError?.message) && !isSpuriousSubscriptionError
       const warning = refreshWarnings[account.email]
       const warningLabel =
         warning?.kind === 'auth'
@@ -3524,7 +3538,11 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       const disabledTitle = account.disabled
         ? `${t('accounts.status.disabled')}${account.disabled_reason ? `: ${account.disabled_reason}` : ''}`
         : ''
-      const verificationReason = account.disabled_reason || verificationStatusMap[account.id]
+      const rawVerificationReason = account.disabled_reason || verificationStatusMap[account.id]
+      const verificationReason =
+        rawVerificationReason === 'subscription_required' && hasValidModels
+          ? undefined
+          : rawVerificationReason
       const hasVerificationIssue = verificationReason === 'verification_required' || verificationReason === 'tos_violation'
 
       return (
