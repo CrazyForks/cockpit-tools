@@ -4,9 +4,9 @@
  * - 显示分组列表及账号数量
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, FolderOpen, Plus, Pencil, Trash2, FolderPlus, AlertCircle, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
+import { X, FolderOpen, Plus, Pencil, Trash2, FolderPlus, AlertCircle, GripVertical, ChevronUp, ChevronDown, Search } from 'lucide-react';
 import {
   AccountGroup,
   getPlatformGroups,
@@ -14,12 +14,16 @@ import {
   deletePlatformGroup,
   renamePlatformGroup,
   assignAccountsToPlatformGroup,
+  setPlatformGroupAccounts,
   reorderPlatformGroups,
   normalizePlatform,
 } from '../services/platformGroupService';
 import { invalidateCache as invalidateLegacyCache } from '../services/accountGroupService';
+import { listAccounts } from '../services/accountService';
+import { getAntigravityTierBadge } from '../utils/account';
 import { useEscClose } from '../hooks/useEscClose';
 import './AccountGroupModal.css';
+import './GroupAccountPickerModal.css';
 
 function getGroupIndexAtPoint(clientX: number, clientY: number, container: HTMLElement | null): number | null {
   const element = document.elementFromPoint(clientX, clientY);
@@ -63,13 +67,15 @@ interface AccountGroupModalProps {
   onToggleGroupFilter?: (groupId: string) => void;
   /** 清空分组筛选 */
   onClearGroupFilter?: () => void;
-  /** 点击添加账号回调 */
+  /** 点击添加账号回调（可选，优先由外部处理；若未提供则使用内置通用账号选择器） */
   onAddAccounts?: (group: AccountGroup) => void;
+  /** 可选账号列表（用于通用添加账号弹窗） */
+  accounts?: Array<{ id: string; [key: string]: any }>;
 }
 
 export const AccountGroupModal = ({
   isOpen, onClose, onGroupsChanged, platform,
-  onAddAccounts,
+  onAddAccounts, accounts,
 }: AccountGroupModalProps) => {
   const { t } = useTranslation();
   useEscClose(isOpen, onClose);
@@ -80,6 +86,8 @@ export const AccountGroupModal = ({
   const [renameValue, setRenameValue] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pickerTargetGroup, setPickerTargetGroup] = useState<AccountGroup | null>(null);
+  const [loadedAccounts, setLoadedAccounts] = useState<Array<{ id: string; [key: string]: any }>>([]);
 
   const listRef = useRef<HTMLDivElement>(null);
   const dragSourceIndexRef = useRef<number | null>(null);
@@ -92,11 +100,22 @@ export const AccountGroupModal = ({
   }, [platformKey]);
 
   useEffect(() => {
+    if (accounts && accounts.length > 0) {
+      setLoadedAccounts(accounts);
+    } else if (platformKey === 'antigravity' && isOpen) {
+      listAccounts().then((accs) => setLoadedAccounts(accs)).catch(console.error);
+    } else {
+      setLoadedAccounts(accounts || []);
+    }
+  }, [accounts, platformKey, isOpen]);
+
+  useEffect(() => {
     if (isOpen) {
       reload();
       setNewName('');
       setRenamingId(null);
       setDeleteConfirmId(null);
+      setPickerTargetGroup(null);
       dragSourceIndexRef.current = null;
       dragStartPosRef.current = null;
       setDraggingIndex(null);
@@ -380,17 +399,21 @@ export const AccountGroupModal = ({
                         </>
                       ) : (
                         <>
-                          {onAddAccounts && (
-                            <button
-                              type="button"
-                              className="group-action-btn add-btn"
-                              onClick={() => onAddAccounts(group)}
-                              title={t('accounts.groups.addAccounts', '添加账号')}
-                            >
-                              <FolderPlus size={14} />
-                              <span>{t('accounts.groups.addAccounts', '添加账号')}</span>
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            className="group-action-btn add-btn"
+                            onClick={() => {
+                              if (onAddAccounts) {
+                                onAddAccounts(group);
+                              } else {
+                                setPickerTargetGroup(group);
+                              }
+                            }}
+                            title={t('accounts.groups.addAccounts', '添加账号')}
+                          >
+                            <FolderPlus size={14} />
+                            <span>{t('accounts.groups.addAccounts', '添加账号')}</span>
+                          </button>
                           <button
                             type="button"
                             className="group-action-btn"
@@ -442,9 +465,319 @@ export const AccountGroupModal = ({
           </button>
         </div>
       </div>
+
+      <UniversalGroupAccountPickerModal
+        isOpen={!!pickerTargetGroup}
+        targetGroup={pickerTargetGroup}
+        accounts={loadedAccounts}
+        accountGroups={groups}
+        platform={platformKey}
+        onClose={() => setPickerTargetGroup(null)}
+        onConfirm={async ({ accountIds }) => {
+          if (!pickerTargetGroup) return;
+          await setPlatformGroupAccounts(
+            platformKey,
+            pickerTargetGroup.id,
+            accountIds
+          );
+          if (platformKey === 'antigravity') {
+            invalidateLegacyCache();
+          }
+          await reload();
+          await onGroupsChanged();
+        }}
+      />
     </div>
   );
 };
+
+// ─── 通用添加账号到分组弹窗 ──────────────────────────────────
+
+export interface UniversalGroupAccountPickerModalProps {
+  isOpen: boolean;
+  targetGroup: AccountGroup | null;
+  accounts: Array<{ id: string; [key: string]: any }>;
+  accountGroups: AccountGroup[];
+  platform?: string;
+  onClose: () => void;
+  onConfirm: (payload: { accountIds: string[] }) => Promise<void> | void;
+}
+
+export function UniversalGroupAccountPickerModal({
+  isOpen,
+  targetGroup,
+  accounts,
+  accountGroups,
+  onClose,
+  onConfirm,
+}: UniversalGroupAccountPickerModalProps) {
+  const { t } = useTranslation();
+  useEscClose(isOpen, onClose);
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen || !targetGroup) return;
+    setQuery('');
+    const validIds = new Set(accounts.map((a) => a.id));
+    setSelected(new Set((targetGroup.accountIds || []).filter((id) => validIds.has(id))));
+    setError('');
+  }, [isOpen, targetGroup, accounts]);
+
+  const groupsByAccountId = useMemo(() => {
+    const result = new Map<string, AccountGroup[]>();
+    for (const group of accountGroups) {
+      for (const accountId of group.accountIds) {
+        const list = result.get(accountId) || [];
+        list.push(group);
+        result.set(accountId, list);
+      }
+    }
+    return result;
+  }, [accountGroups]);
+
+  const visibleAccounts = useMemo(() => {
+    if (!targetGroup) return [];
+    const queryText = query.trim().toLowerCase();
+    let next = [...accounts].sort((a, b) => {
+      const aName = (a.email || a.name || a.id || '').toLowerCase();
+      const bName = (b.email || b.name || b.id || '').toLowerCase();
+      return aName.localeCompare(bName);
+    });
+
+    if (!queryText) return next;
+
+    return next.filter((account) => {
+      const email = (account.email || '').toLowerCase();
+      const name = (account.name || account.displayName || account.username || '').toLowerCase();
+      const groupNames = (groupsByAccountId.get(account.id) || [])
+        .map((g) => g.name.toLowerCase())
+        .join(' ');
+      return (
+        email.includes(queryText) ||
+        name.includes(queryText) ||
+        account.id.toLowerCase().includes(queryText) ||
+        groupNames.includes(queryText)
+      );
+    });
+  }, [accounts, groupsByAccountId, query, targetGroup]);
+
+  const selectedVisibleCount = useMemo(
+    () =>
+      visibleAccounts.reduce(
+        (count, account) => count + (selected.has(account.id) ? 1 : 0),
+        0
+      ),
+    [selected, visibleAccounts]
+  );
+
+  const allVisibleSelected =
+    visibleAccounts.length > 0 && selectedVisibleCount === visibleAccounts.length;
+
+  useEffect(() => {
+    if (!selectAllCheckboxRef.current) return;
+    selectAllCheckboxRef.current.indeterminate =
+      selectedVisibleCount > 0 && !allVisibleSelected;
+  }, [allVisibleSelected, selectedVisibleCount]);
+
+  const toggleSelectAllVisible = () => {
+    if (saving || visibleAccounts.length === 0) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        for (const account of visibleAccounts) {
+          next.delete(account.id);
+        }
+      } else {
+        for (const account of visibleAccounts) {
+          next.add(account.id);
+        }
+      }
+      return next;
+    });
+  };
+
+  const toggleSelect = (accountId: string) => {
+    if (saving) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(accountId)) {
+        next.delete(accountId);
+      } else {
+        next.add(accountId);
+      }
+      return next;
+    });
+  };
+
+  const handleConfirm = async () => {
+    if (!targetGroup || saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      await onConfirm({
+        accountIds: Array.from(selected),
+      });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!isOpen || !targetGroup) return null;
+
+  return (
+    <div className="modal-overlay" style={{ zIndex: 10050 }}>
+      <div className="modal group-account-picker-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-header">
+          <h2 className="group-account-picker-title">
+            <FolderPlus size={18} />
+            <span>{t('accounts.groups.addAccounts', '添加账号')}</span>
+            <span className="group-account-picker-target">{targetGroup.name}</span>
+          </h2>
+          <button
+            className="modal-close"
+            onClick={onClose}
+            aria-label={t('common.close', '关闭')}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="modal-body group-account-picker-body">
+          <div className="group-account-toolbar">
+            <div className="group-account-search">
+              <Search size={16} className="group-account-search-icon" />
+              <input
+                type="text"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={t('accounts.search', '搜索账号...')}
+              />
+            </div>
+          </div>
+
+          <div className="group-account-item group-account-item-header">
+            <input
+              ref={selectAllCheckboxRef}
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={toggleSelectAllVisible}
+              disabled={saving || visibleAccounts.length === 0}
+            />
+            <div className="group-account-main">
+              <span className="group-account-email" style={{ fontWeight: 600, fontSize: '12px', color: 'var(--text-secondary)' }}>
+                {t('common.selectAll', '全选')} ({selectedVisibleCount}/{visibleAccounts.length})
+              </span>
+            </div>
+          </div>
+
+          <div className="group-account-list">
+            {visibleAccounts.length === 0 ? (
+              <div className="group-account-empty">{t('accounts.groups.accountPickerEmpty', '没有符合条件的账号')}</div>
+            ) : (
+              visibleAccounts.map((account) => {
+                const currentGroups = groupsByAccountId.get(account.id) || [];
+                const isChecked = selected.has(account.id);
+                const isUngrouped = currentGroups.length === 0;
+
+                const email = account.email || account.account_name || account.account_id || '';
+                const name = account.name || account.displayName || account.username || '';
+                let displayName = email;
+                if (email && name && email !== name) {
+                  displayName = `${email} (${name})`;
+                } else if (!displayName) {
+                  displayName = name || account.id || '';
+                }
+
+                let planLabel = '';
+                let planClass = '';
+                if (account.quota) {
+                  const badge = getAntigravityTierBadge(account.quota);
+                  if (badge.tier !== 'UNKNOWN') {
+                    planLabel = badge.label;
+                    planClass = badge.className;
+                  }
+                } else if (account.plan_type) {
+                  planLabel = String(account.plan_type).toUpperCase();
+                  planClass = 'plan-badge-default';
+                } else if (account.subscription_tier) {
+                  planLabel = String(account.subscription_tier).toUpperCase();
+                  planClass = 'plan-badge-default';
+                } else if (account.plan) {
+                  planLabel = String(account.plan).toUpperCase();
+                  planClass = 'plan-badge-default';
+                }
+
+                return (
+                  <label
+                    key={account.id}
+                    className={`group-account-item${isChecked ? ' is-current' : ''}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      disabled={saving}
+                      onChange={() => toggleSelect(account.id)}
+                    />
+                    <div className="group-account-main">
+                      <span className="group-account-email" title={displayName}>
+                        {displayName}
+                      </span>
+                      <div className="group-account-meta">
+                        {planLabel && (
+                          <span className={`tier-badge ${planClass} group-account-tier-badge`}>
+                            {planLabel}
+                          </span>
+                        )}
+                        {isUngrouped ? (
+                          <span className="group-account-badge is-ungrouped">
+                            {t('accounts.groups.ungrouped', '未分组')}
+                          </span>
+                        ) : (
+                          currentGroups.map((g) => (
+                            <span
+                              key={g.id}
+                              className={`group-account-badge${g.id === targetGroup.id ? ' is-current-target' : ''}`}
+                            >
+                              {g.name}
+                            </span>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })
+            )}
+          </div>
+
+          {error && <div className="group-account-error">{error}</div>}
+        </div>
+
+        <div className="modal-footer group-account-picker-footer">
+          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>
+            {t('common.cancel', '取消')}
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={handleConfirm}
+            disabled={saving}
+          >
+            {saving
+              ? t('common.saving', '保存中...')
+              : `${t('common.save', '保存')} (${selected.size})`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── 添加到分组弹窗 ──────────────────────────────────────────
 

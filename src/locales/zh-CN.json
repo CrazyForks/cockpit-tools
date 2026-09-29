@@ -356,6 +356,7 @@
         "unlimited": "无限额度",
         "leftPercent": "剩余 {{value}}%",
         "cachedRefreshFailed": "刷新失败，以下为上次成功数据",
+        "cachedNeedsReauth": "⚠️ 账号需完成网页验证以继续使用（以下为上次成功数据）",
         "lastSuccessfulQuery": "上次成功：{{time}}"
       },
       "subtitle": "实时监控所有账号的配额状态。",
@@ -1699,7 +1700,9 @@
       "normal": "正常",
       "forbidden": "403",
       "forbidden_tooltip": "API 返回 403 Forbidden，账号无权使用 Gemini Code Assist",
-      "forbidden_msg": "账号无权限，已跳过自动刷新"
+      "forbidden_msg": "账号无权限，已跳过自动刷新",
+      "needsReauth": "需网页验证",
+      "needsReauthTooltip": "Google 要求进行网页安全验证以继续使用"
     },
     "tier": {
       "pro": "PRO",
@@ -1834,7 +1837,12 @@
       "delete": "删除",
       "deleteSelected": "删除选中",
       "export": "导出",
-      "refreshAll": "刷新全部"
+      "refreshAll": "刷新全部",
+      "reauth": "重新授权",
+      "reauthTooltip": "Google 要求重新验证，点击立即重新授权",
+      "openValidationUrl": "网页验证",
+      "copyValidationUrl": "复制验证链接",
+      "copyValidationUrlTooltip": "复制网页验证地址"
     },
     "switchHistory": {
       "title": "切换记录",

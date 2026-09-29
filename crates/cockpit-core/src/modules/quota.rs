@@ -382,10 +382,64 @@ struct QuotaInfo {
     reset_time: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaFetchError {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<u16>,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_url: Option<String>,
+}
+
+pub fn parse_google_api_error(status: u16, text: &str) -> QuotaFetchError {
+    let mut message = if text.trim().is_empty() {
+        format!("API returned status {}", status)
+    } else {
+        text.to_string()
+    };
+    let mut reason: Option<String> = None;
+    let mut validation_url: Option<String> = None;
+
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
+        if let Some(err_obj) = val.get("error") {
+            if let Some(msg) = err_obj.get("message").and_then(|v| v.as_str()) {
+                message = msg.to_string();
+            }
+            if let Some(details) = err_obj.get("details").and_then(|v| v.as_array()) {
+                for detail in details {
+                    if reason.is_none() {
+                        if let Some(r) = detail.get("reason").and_then(|v| v.as_str()) {
+                            reason = Some(r.to_string());
+                        }
+                    }
+                    if validation_url.is_none() {
+                        if let Some(metadata) = detail.get("metadata") {
+                            if let Some(url) = metadata.get("validation_url").and_then(|v| v.as_str()) {
+                                validation_url = Some(url.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if reason.is_none() {
+        if message.contains("Verify your account") {
+            reason = Some("VALIDATION_REQUIRED".to_string());
+        } else if message.contains("Subscription required") {
+            reason = Some("SUBSCRIPTION_REQUIRED".to_string());
+        }
+    }
+
+    QuotaFetchError {
+        code: Some(status),
+        message,
+        reason,
+        validation_url,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1042,17 +1096,10 @@ pub async fn fetch_quota_with_context(
                         let mut q = QuotaData::new();
                         q.is_forbidden = true;
                         q.subscription_tier = subscription_tier.clone();
-                        let message = if text.trim().is_empty() {
-                            "API returned 403 Forbidden".to_string()
-                        } else {
-                            text
-                        };
+                        let parsed_error = parse_google_api_error(status.as_u16(), &text);
                         return Ok(QuotaFetchResult {
                             quota: q,
-                            error: Some(QuotaFetchError {
-                                code: Some(status.as_u16()),
-                                message,
-                            }),
+                            error: Some(parsed_error),
                         });
                     }
 
@@ -1073,8 +1120,9 @@ pub async fn fetch_quota_with_context(
                     .map_err(|e| AppError::Unknown(format!("API 响应解析失败: {}", e)))?;
 
                 // Fetch retrieveUserQuotaSummary to get weekly and 5h buckets
-                let summary_url = format!("{}/v1internal:retrieveUserQuotaSummary", base_url);
                 let mut quota_summary_val: Option<serde_json::Value> = None;
+                let mut quota_summary_error: Option<QuotaFetchError> = None;
+                let summary_url = format!("{}/v1internal:retrieveUserQuotaSummary", base_url);
                 crate::modules::logger::log_info(&format!(
                     "[Quota] 发送 retrieveUserQuotaSummary, url: {}",
                     summary_url
@@ -1123,14 +1171,21 @@ pub async fn fetch_quota_with_context(
                             }
                         } else {
                             let err_text = res.text().await.unwrap_or_default();
-                            crate::modules::logger::log_error(&format!(
+                            crate::modules::logger::log_warn(&format!(
                                 "[Quota] retrieveUserQuotaSummary 请求未成功: {}, body: {}",
                                 status, err_text
                             ));
+                            let parsed = parse_google_api_error(status.as_u16(), &err_text);
+                            if parsed.reason.as_deref() == Some("VALIDATION_REQUIRED")
+                                || parsed.validation_url.is_some()
+                                || parsed.message.contains("Verify your account")
+                            {
+                                quota_summary_error = Some(parsed);
+                            }
                         }
                     }
                     Err(e) => {
-                        crate::modules::logger::log_error(&format!(
+                        crate::modules::logger::log_warn(&format!(
                             "[Quota] retrieveUserQuotaSummary 发送失败: {}",
                             e
                         ));
@@ -1156,7 +1211,7 @@ pub async fn fetch_quota_with_context(
 
                 return Ok(QuotaFetchResult {
                     quota: quota_data,
-                    error: None,
+                    error: quota_summary_error,
                 });
             }
             Err(e) => {

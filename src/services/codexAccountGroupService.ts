@@ -340,17 +340,19 @@ export async function addAccountsToCodexGroup(groupId: string, accountIds: strin
   return assignAccountsToCodexGroup(groupId, accountIds);
 }
 
+export async function setCodexGroupAccounts(groupId: string, accountIds: string[]): Promise<CodexAccountGroup | null> {
+  const groups = await loadGroups();
+  const group = groups.find((g) => g.id === groupId);
+  if (!group) return null;
+  group.accountIds = Array.from(new Set(accountIds));
+  await saveGroups(groups);
+  return group;
+}
+
 export async function assignAccountsToCodexGroup(groupId: string, accountIds: string[]): Promise<CodexAccountGroup | null> {
   const groups = await loadGroups();
   const group = groups.find((g) => g.id === groupId);
   if (!group) return null;
-  const targetIds = new Set(accountIds);
-
-  // 从其他分组中移除
-  for (const currentGroup of groups) {
-    if (currentGroup.id === groupId) continue;
-    currentGroup.accountIds = currentGroup.accountIds.filter((id) => !targetIds.has(id));
-  }
 
   // 添加到目标分组
   const existing = new Set(group.accountIds);

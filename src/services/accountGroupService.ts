@@ -190,16 +190,21 @@ export function addAccountsToGroup(groupId: string, accountIds: string[]): Promi
   return enqueue(() => assignAccountsToGroupInternal(groupId, accountIds));
 }
 
+export function setGroupAccounts(groupId: string, accountIds: string[]): Promise<AccountGroup | null> {
+  return enqueue(async () => {
+    const groups = await loadGroups();
+    const group = groups.find((g) => g.id === groupId);
+    if (!group) return null;
+    group.accountIds = Array.from(new Set(accountIds));
+    await saveGroups(groups);
+    return group;
+  });
+}
+
 async function assignAccountsToGroupInternal(groupId: string, accountIds: string[]): Promise<AccountGroup | null> {
   const groups = await loadGroups();
   const group = groups.find((g) => g.id === groupId);
   if (!group) return null;
-  const targetIds = new Set(accountIds);
-
-  for (const currentGroup of groups) {
-    if (currentGroup.id === groupId) continue;
-    currentGroup.accountIds = currentGroup.accountIds.filter((id) => !targetIds.has(id));
-  }
 
   const existing = new Set(group.accountIds);
   for (const id of accountIds) {

@@ -7,6 +7,7 @@ import {
   X,
   Globe,
   Check,
+  Copy,
   Lock,
   AlertTriangle,
   CircleAlert,
@@ -17,6 +18,7 @@ import {
   EyeOff,
   Tag,
   FileText,
+  ExternalLink,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAccountStore } from '../stores/useAccountStore'
@@ -26,6 +28,7 @@ import { Page } from '../types/navigation'
 import {
   getAntigravityTierBadge,
 } from '../utils/account'
+import { formatGoogleValidationUrl } from '../utils/googleValidationUrl'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
@@ -49,8 +52,10 @@ import {
   calculateGroupQuota,
   updateGroupOrder
 } from '../services/groupService'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import {
   getAntigravityQuotaDisplayItems,
+  isAccountNeedsReauth,
 } from '../presentation/platformAccountPresentation'
 import {
   ANTIGRAVITY_RESET_SORT_PREFIX,
@@ -221,14 +226,57 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
   const getVerificationBadge = useCallback((account: Account) => {
     // 优先从 disabled_reason 读（新版），回退到验证历史（旧数据兼容）
     const reason = account.disabled_reason || verificationStatusMap[account.id]
-    if (reason === 'verification_required') {
-      return { label: t('wakeup.errorUi.verificationRequiredTitle', 'Need Verify'), className: 'is-warning' }
-    }
     if (reason === 'tos_violation') {
       return { label: t('wakeup.errorUi.tosViolationTitle', 'TOS'), className: 'is-tos-violation' }
     }
+    if (reason === 'verification_required' || isAccountNeedsReauth(account, verificationStatusMap)) {
+      return { label: t('accounts.status.needsReauth', '需网页验证'), className: 'is-warning' }
+    }
     return null
   }, [verificationStatusMap, t])
+
+  const resolveValidationUrl = useCallback((account: Account) => {
+    let rawUrl: string | null = null
+    if (account.quota_error?.validation_url) {
+      rawUrl = account.quota_error.validation_url
+    } else {
+      const vDetail = verificationDetailMap[account.id]
+      if (vDetail?.validationUrl) {
+        rawUrl = vDetail.validationUrl
+      } else if (account.quota_error?.message) {
+        const match = account.quota_error.message.match(/https?:\/\/[^\s"'\)]+/)
+        if (match) rawUrl = match[0]
+      }
+    }
+    if (!rawUrl) return null
+    return formatGoogleValidationUrl(rawUrl, account.email)
+  }, [verificationDetailMap])
+
+  const [copiedValidationUrlAccountId, setCopiedValidationUrlAccountId] = useState<string | null>(null)
+  const copiedValidationUrlTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleCopyValidationUrl = useCallback(async (accountId: string, url: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopiedValidationUrlAccountId(accountId)
+      if (copiedValidationUrlTimerRef.current) {
+        clearTimeout(copiedValidationUrlTimerRef.current)
+      }
+      copiedValidationUrlTimerRef.current = setTimeout(() => {
+        setCopiedValidationUrlAccountId(null)
+      }, 2000)
+    } catch (err) {
+      console.error('Failed to copy validation URL:', err)
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (copiedValidationUrlTimerRef.current) {
+        clearTimeout(copiedValidationUrlTimerRef.current)
+      }
+    }
+  }, [])
 
   // 文件损坏错误状态
   const [fileCorruptedError, setFileCorruptedError] = useState<FileCorruptedError | null>(null)
@@ -1145,7 +1193,8 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       const verificationReason = account.disabled_reason || verificationStatusMap[account.id]
       const hasVerificationIssue =
         verificationReason === 'verification_required' || verificationReason === 'tos_violation'
-      return isDisabled || isForbidden || hasWarning || hasVerificationIssue
+      const needsReauth = isAccountNeedsReauth(account, verificationStatusMap)
+      return isDisabled || isForbidden || hasWarning || hasVerificationIssue || needsReauth
     },
     [refreshWarnings, verificationStatusMap]
   )
@@ -2809,7 +2858,12 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     groupKey === untaggedKey ? t('accounts.untagged', '未分组') : groupKey
 
   const renderCustomQuotaSection = (account: Account, isList: boolean = false) => (
-    <AntigravityQuotaSection items={getQuotaDisplayItems(account)} isList={isList} t={t} />
+    <AntigravityQuotaSection
+      items={getQuotaDisplayItems(account)}
+      isList={isList}
+      isNeedsReauth={isAccountNeedsReauth(account, verificationStatusMap)}
+      t={t}
+    />
   );
 
   const renderGridCards = (items: Account[], groupKey?: string) =>
@@ -2821,7 +2875,12 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       const isForbidden = Boolean(account.quota?.is_forbidden)
       const isSelected = selected.has(account.id)
       const quotaError = account.quota_error
-      const hasQuotaError = Boolean(quotaError?.message)
+      const hasValidModels = Boolean(account.quota?.models && account.quota.models.length > 0)
+      const isSpuriousSubscriptionError =
+        hasValidModels &&
+        (quotaError?.reason === 'SUBSCRIPTION_REQUIRED' ||
+          Boolean(quotaError?.message?.includes('valid license')))
+      const hasQuotaError = Boolean(quotaError?.message) && !isSpuriousSubscriptionError
       const accountTags = (account.tags || []).map((tag) => tag.trim()).filter(Boolean)
       const visibleTags = accountTags.slice(0, 2)
       const moreTagCount = Math.max(0, accountTags.length - visibleTags.length)
@@ -2835,7 +2894,11 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       const disabledTitle = isDisabled
         ? `${t('accounts.status.disabled')}${account.disabled_reason ? `: ${account.disabled_reason}` : ''}`
         : ''
-      const verificationReason = account.disabled_reason || verificationStatusMap[account.id]
+      const rawVerificationReason = account.disabled_reason || verificationStatusMap[account.id]
+      const verificationReason =
+        rawVerificationReason === 'subscription_required' && hasValidModels
+          ? undefined
+          : rawVerificationReason
       const hasVerificationIssue = verificationReason === 'verification_required' || verificationReason === 'tos_violation'
 
       const hasModels = account.quota?.models && account.quota.models.length > 0
@@ -2875,7 +2938,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                 {warningLabel}
               </span>
             )}
-            {isDisabled && (
+            {isDisabled && !isAccountNeedsReauth(account, verificationStatusMap) && (
               <span className="status-pill disabled" title={disabledTitle}>
                 <CircleAlert size={12} />
                 {t('accounts.status.disabled')}
@@ -2911,6 +2974,62 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                 {t('codex.pendingAuth.authorizeAction', '授权添加')}
               </button>
             )}
+            {!isPendingAntigravityAccount(account) && isAccountNeedsReauth(account, verificationStatusMap) && (() => {
+              const validationUrl = resolveValidationUrl(account)
+              const isCopied = copiedValidationUrlAccountId === account.id
+              return (
+                <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline validation-warning-btn"
+                    style={{
+                      color: 'var(--color-warning, #f59e0b)',
+                      borderColor: 'var(--color-warning, #f59e0b)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}
+                    onClick={async () => {
+                      if (validationUrl) {
+                        try {
+                          await openUrl(validationUrl)
+                        } catch {
+                          window.open(validationUrl, '_blank', 'noopener,noreferrer')
+                        }
+                      } else {
+                        setShowVerificationErrorModal(account.id)
+                      }
+                    }}
+                    title={validationUrl || t('modals.errors.viewVerificationDetail', '查看验证详情')}
+                  >
+                    <ExternalLink size={12} />
+                    <span>{t('accounts.actions.openValidationUrl', '网页验证')}</span>
+                  </button>
+                  {validationUrl && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-outline copy-validation-btn"
+                      style={{
+                        color: isCopied ? 'var(--color-success, #10b981)' : 'var(--color-warning, #f59e0b)',
+                        borderColor: isCopied ? 'var(--color-success, #10b981)' : 'var(--color-warning, #f59e0b)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                      onClick={() => handleCopyValidationUrl(account.id, validationUrl)}
+                      title={t('accounts.actions.copyValidationUrlTooltip', '复制网页验证地址')}
+                    >
+                      {isCopied ? <Check size={12} /> : <Copy size={12} />}
+                      <span>
+                        {isCopied
+                          ? t('common.copied', '已复制')
+                          : t('accounts.actions.copyValidationUrl', '复制验证链接')}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              )
+            })()}
           </div>
 
           {account.notes && (
@@ -2927,7 +3046,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
               </div>
             ) : (
               <>
-                {hasQuotaError && (
+                {hasQuotaError && !isAccountNeedsReauth(account, verificationStatusMap) && (
                   <div className="quota-empty" title={quotaError?.message}>
                     {t('common.shared.quota.queryFailed', '配额查询失败')}
                   </div>
@@ -2965,11 +3084,11 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                   <Globe size={14} />
                 </button>
               )}
-              {(hasQuotaError || hasVerificationIssue) && (
+              {(hasQuotaError || hasVerificationIssue || isAccountNeedsReauth(account, verificationStatusMap)) && (
                 <button
                   className="card-action-btn is-danger"
                   onClick={() =>
-                    hasVerificationIssue
+                    (hasVerificationIssue || isAccountNeedsReauth(account, verificationStatusMap))
                       ? setShowVerificationErrorModal(account.id)
                       : setShowErrorModal(account.id)
                   }
@@ -3403,7 +3522,12 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       const availableCreditsDisplay = getAvailableAICreditsDisplay(account)
       const isForbidden = Boolean(account.quota?.is_forbidden)
       const quotaError = account.quota_error
-      const hasQuotaError = Boolean(quotaError?.message)
+      const hasValidModels = Boolean(account.quota?.models && account.quota.models.length > 0)
+      const isSpuriousSubscriptionError =
+        hasValidModels &&
+        (quotaError?.reason === 'SUBSCRIPTION_REQUIRED' ||
+          Boolean(quotaError?.message?.includes('valid license')))
+      const hasQuotaError = Boolean(quotaError?.message) && !isSpuriousSubscriptionError
       const warning = refreshWarnings[account.email]
       const warningLabel =
         warning?.kind === 'auth'
@@ -3414,7 +3538,11 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       const disabledTitle = account.disabled
         ? `${t('accounts.status.disabled')}${account.disabled_reason ? `: ${account.disabled_reason}` : ''}`
         : ''
-      const verificationReason = account.disabled_reason || verificationStatusMap[account.id]
+      const rawVerificationReason = account.disabled_reason || verificationStatusMap[account.id]
+      const verificationReason =
+        rawVerificationReason === 'subscription_required' && hasValidModels
+          ? undefined
+          : rawVerificationReason
       const hasVerificationIssue = verificationReason === 'verification_required' || verificationReason === 'tos_violation'
 
       return (
@@ -3451,6 +3579,62 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                     {t('codex.pendingAuth.authorizeAction', '授权添加')}
                   </button>
                 )}
+                {!isPendingAntigravityAccount(account) && isAccountNeedsReauth(account, verificationStatusMap) && (() => {
+                  const validationUrl = resolveValidationUrl(account)
+                  const isCopied = copiedValidationUrlAccountId === account.id
+                  return (
+                    <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline validation-warning-btn"
+                        style={{
+                          color: 'var(--color-warning, #f59e0b)',
+                          borderColor: 'var(--color-warning, #f59e0b)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                        }}
+                        onClick={async () => {
+                          if (validationUrl) {
+                            try {
+                              await openUrl(validationUrl)
+                            } catch {
+                              window.open(validationUrl, '_blank', 'noopener,noreferrer')
+                            }
+                          } else {
+                            setShowVerificationErrorModal(account.id)
+                          }
+                        }}
+                        title={validationUrl || t('modals.errors.viewVerificationDetail', '查看验证详情')}
+                      >
+                        <ExternalLink size={12} />
+                        <span>{t('accounts.actions.openValidationUrl', '网页验证')}</span>
+                      </button>
+                      {validationUrl && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline copy-validation-btn"
+                          style={{
+                            color: isCopied ? 'var(--color-success, #10b981)' : 'var(--color-warning, #f59e0b)',
+                            borderColor: isCopied ? 'var(--color-success, #10b981)' : 'var(--color-warning, #f59e0b)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}
+                          onClick={() => handleCopyValidationUrl(account.id, validationUrl)}
+                          title={t('accounts.actions.copyValidationUrlTooltip', '复制网页验证地址')}
+                        >
+                          {isCopied ? <Check size={12} /> : <Copy size={12} />}
+                          <span>
+                            {isCopied
+                              ? t('common.copied', '已复制')
+                              : t('accounts.actions.copyValidationUrl', '复制验证链接')}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
               <div className="account-sub-line">
                 <span className={`tier-badge ${tierBadge.className}`}>
@@ -3471,7 +3655,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                     {warningLabel}
                   </span>
                 )}
-                {account.disabled && (
+                {account.disabled && !isAccountNeedsReauth(account, verificationStatusMap) && (
                   <span className="status-pill disabled" title={disabledTitle}>
                     <CircleAlert size={12} />
                     {t('accounts.status.disabled')}
@@ -3495,7 +3679,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                 </div>
               ) : (
                 <>
-                  {hasQuotaError && (
+                  {hasQuotaError && !isAccountNeedsReauth(account, verificationStatusMap) && (
                     <div className="quota-empty" title={quotaError?.message}>
                       {t('common.shared.quota.queryFailed', '配额查询失败')}
                     </div>
@@ -3517,11 +3701,11 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                   <Globe size={16} />
                 </button>
               )}
-              {(hasQuotaError || hasVerificationIssue) && (
+              {(hasQuotaError || hasVerificationIssue || isAccountNeedsReauth(account, verificationStatusMap)) && (
                 <button
                   className="action-btn is-danger"
                   onClick={() =>
-                    hasVerificationIssue
+                    (hasVerificationIssue || isAccountNeedsReauth(account, verificationStatusMap))
                       ? setShowVerificationErrorModal(account.id)
                       : setShowErrorModal(account.id)
                   }
@@ -3684,6 +3868,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     confirmClearSwitchHistory,
     confirmDelete,
     confirmDeleteTag,
+    copiedValidationUrlAccountId,
     copyAccountNoteValue,
     currentAccount,
     customSortAccounts,
@@ -3718,6 +3903,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     handleBatchDelete,
     handleClearSwitchHistory,
     handleCopyOauthUrl,
+    handleCopyValidationUrl,
     handleCustomSortDragMove,
     handleCustomSortDragStart,
     handleExport,
@@ -3762,6 +3948,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     onNavigate,
     openAddModal,
     openOAuthAccountNoteModal,
+    openPendingOAuthAccount,
     openSwitchHistoryModal,
     paginatedIds,
     pagination,
@@ -3779,6 +3966,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     requestDeleteTag,
     resetAddModalState,
     resetCustomSortOrder,
+    resolveValidationUrl,
     savedMfaRecords,
     savingAccountNote,
     savingPendingOAuthAccount,

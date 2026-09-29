@@ -386,10 +386,120 @@ struct QuotaInfo {
     reset_time: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaFetchError {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<u16>,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_url: Option<String>,
+}
+
+pub fn format_google_validation_url(raw_url: &str, email: &str) -> String {
+    let email = email.trim();
+    if raw_url.trim().is_empty() || email.is_empty() {
+        return raw_url.to_string();
+    }
+
+    match url::Url::parse(raw_url) {
+        Ok(mut parsed) => {
+            let host = match parsed.host_str() {
+                Some(h) => h.to_ascii_lowercase(),
+                None => return raw_url.to_string(),
+            };
+            let is_google_host = host == "accounts.google.com"
+                || host == "google.com"
+                || host.ends_with(".google.com");
+            if !is_google_host {
+                return raw_url.to_string();
+            }
+
+            let mut pairs: Vec<(String, String)> = parsed.query_pairs().into_owned().collect();
+            let has_valid_authuser = pairs.iter().any(|(k, v)| {
+                k == "authuser" && !v.trim().is_empty() && !v.trim().chars().all(|c| c.is_ascii_digit())
+            });
+            let has_login_hint = pairs.iter().any(|(k, v)| k == "login_hint" && !v.trim().is_empty());
+            let has_email = pairs.iter().any(|(k, v)| k == "Email" && !v.trim().is_empty());
+
+            if !has_valid_authuser {
+                pairs.retain(|(k, _)| k != "authuser");
+                pairs.push(("authuser".to_string(), email.to_string()));
+            }
+            if !has_login_hint {
+                pairs.retain(|(k, _)| k != "login_hint");
+                pairs.push(("login_hint".to_string(), email.to_string()));
+            }
+            if !has_email {
+                pairs.retain(|(k, _)| k != "Email");
+                pairs.push(("Email".to_string(), email.to_string()));
+            }
+
+            parsed.query_pairs_mut().clear().extend_pairs(pairs);
+            parsed.to_string()
+        }
+        Err(_) => raw_url.to_string(),
+    }
+}
+
+pub fn parse_google_api_error(status: u16, text: &str) -> QuotaFetchError {
+    parse_google_api_error_with_email(status, text, None)
+}
+
+pub fn parse_google_api_error_with_email(status: u16, text: &str, email: Option<&str>) -> QuotaFetchError {
+    let mut message = if text.trim().is_empty() {
+        format!("API returned status {}", status)
+    } else {
+        text.to_string()
+    };
+    let mut reason: Option<String> = None;
+    let mut validation_url: Option<String> = None;
+
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
+        if let Some(err_obj) = val.get("error") {
+            if let Some(msg) = err_obj.get("message").and_then(|v| v.as_str()) {
+                message = msg.to_string();
+            }
+            if let Some(details) = err_obj.get("details").and_then(|v| v.as_array()) {
+                for detail in details {
+                    if reason.is_none() {
+                        if let Some(r) = detail.get("reason").and_then(|v| v.as_str()) {
+                            reason = Some(r.to_string());
+                        }
+                    }
+                    if validation_url.is_none() {
+                        if let Some(metadata) = detail.get("metadata") {
+                            if let Some(url) = metadata.get("validation_url").and_then(|v| v.as_str()) {
+                                validation_url = Some(url.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if reason.is_none() {
+        if message.contains("Verify your account") {
+            reason = Some("VALIDATION_REQUIRED".to_string());
+        } else if message.contains("Subscription required") {
+            reason = Some("SUBSCRIPTION_REQUIRED".to_string());
+        }
+    }
+
+    if let Some(url) = validation_url.as_ref() {
+        if let Some(email) = email {
+            validation_url = Some(format_google_validation_url(url, email));
+        }
+    }
+
+    QuotaFetchError {
+        code: Some(status),
+        message,
+        reason,
+        validation_url,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -980,7 +1090,11 @@ fn build_quota_data_from_response(
     project_id: Option<String>,
 ) -> QuotaData {
     let mut quota_data = QuotaData::new();
-    let is_free_tier = subscription_tier.as_deref().map(str::to_lowercase).as_deref() == Some("free");
+    let is_free_tier = subscription_tier
+        .as_deref()
+        .map(str::to_lowercase)
+        .map(|s| s.contains("free") || (!s.contains("pro") && !s.contains("ultra")))
+        .unwrap_or(false);
     quota_data.quota_summary_stale = if is_free_tier {
         false
     } else {
@@ -1199,17 +1313,10 @@ pub async fn fetch_quota_with_context(
                         q.subscription_tier = subscription_tier.clone();
                         q.is_gcp_tos = is_gcp_tos;
                         q.project_id = resolved_project_id.clone();
-                        let message = if text.trim().is_empty() {
-                            "API returned 403 Forbidden".to_string()
-                        } else {
-                            text
-                        };
+                        let parsed_error = parse_google_api_error_with_email(status.as_u16(), &text, Some(email));
                         return Ok(QuotaFetchResult {
                             quota: q,
-                            error: Some(QuotaFetchError {
-                                code: Some(status.as_u16()),
-                                message,
-                            }),
+                            error: Some(parsed_error),
                         });
                     }
 
@@ -1230,8 +1337,9 @@ pub async fn fetch_quota_with_context(
                     .map_err(|e| AppError::Unknown(format!("API 响应解析失败: {}", e)))?;
 
                 // Fetch retrieveUserQuotaSummary to get weekly and 5h buckets
-                let summary_url = format!("{}/v1internal:retrieveUserQuotaSummary", base_url);
                 let mut quota_summary_val: Option<serde_json::Value> = None;
+                let mut quota_summary_error: Option<QuotaFetchError> = None;
+                let summary_url = format!("{}/v1internal:retrieveUserQuotaSummary", base_url);
                 crate::modules::logger::log_info(&format!(
                     "[Quota] 发送 retrieveUserQuotaSummary, url: {}",
                     summary_url
@@ -1280,14 +1388,21 @@ pub async fn fetch_quota_with_context(
                             }
                         } else {
                             let err_text = res.text().await.unwrap_or_default();
-                            crate::modules::logger::log_error(&format!(
+                            crate::modules::logger::log_warn(&format!(
                                 "[Quota] retrieveUserQuotaSummary 请求未成功: {}, body: {}",
                                 status, err_text
                             ));
+                            let parsed = parse_google_api_error_with_email(status.as_u16(), &err_text, Some(email));
+                            if parsed.reason.as_deref() == Some("VALIDATION_REQUIRED")
+                                || parsed.validation_url.is_some()
+                                || parsed.message.contains("Verify your account")
+                            {
+                                quota_summary_error = Some(parsed);
+                            }
                         }
                     }
                     Err(e) => {
-                        crate::modules::logger::log_error(&format!(
+                        crate::modules::logger::log_warn(&format!(
                             "[Quota] retrieveUserQuotaSummary 发送失败: {}",
                             e
                         ));
@@ -1315,7 +1430,7 @@ pub async fn fetch_quota_with_context(
 
                 return Ok(QuotaFetchResult {
                     quota: quota_data,
-                    error: None,
+                    error: quota_summary_error,
                 });
             }
             Err(e) => {
@@ -1330,3 +1445,59 @@ pub async fn fetch_quota_with_context(
 
     Err(AppError::Unknown("配额查询失败".to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_google_validation_url_empty_authuser() {
+        let raw = "https://accounts.google.com/signin/continue?sarp=1&scc=1&continue=https%3A%2F%2Fdevelopers.google.com%2Fgemini-code-assist%2Fauth%2Fauth_success_gemini&plt=AKgnsbtp&flowName=GlifWebSignIn&authuser";
+        let email = "target@gmail.com";
+        let formatted = format_google_validation_url(raw, email);
+
+        let parsed = url::Url::parse(&formatted).unwrap();
+        let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(pairs.get("authuser").map(|s| s.as_str()), Some("target@gmail.com"));
+        assert_eq!(pairs.get("login_hint").map(|s| s.as_str()), Some("target@gmail.com"));
+        assert_eq!(pairs.get("Email").map(|s| s.as_str()), Some("target@gmail.com"));
+        assert_eq!(pairs.get("plt").map(|s| s.as_str()), Some("AKgnsbtp"));
+    }
+
+    #[test]
+    fn test_format_google_validation_url_numeric_authuser() {
+        let raw = "https://accounts.google.com/signin/continue?authuser=0&continue=https%3A%2F%2Fdevelopers.google.com";
+        let formatted = format_google_validation_url(raw, "target@gmail.com");
+
+        let parsed = url::Url::parse(&formatted).unwrap();
+        let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(pairs.get("authuser").map(|s| s.as_str()), Some("target@gmail.com"));
+        assert_eq!(pairs.get("login_hint").map(|s| s.as_str()), Some("target@gmail.com"));
+        assert_eq!(pairs.get("Email").map(|s| s.as_str()), Some("target@gmail.com"));
+    }
+
+    #[test]
+    fn test_format_google_validation_url_preserves_valid_email() {
+        let raw = "https://accounts.google.com/signin/continue?authuser=existing%40gmail.com&continue=https%3A%2F%2Fdevelopers.google.com";
+        let formatted = format_google_validation_url(raw, "target@gmail.com");
+
+        let parsed = url::Url::parse(&formatted).unwrap();
+        let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(pairs.get("authuser").map(|s| s.as_str()), Some("existing@gmail.com"));
+        assert_eq!(pairs.get("login_hint").map(|s| s.as_str()), Some("target@gmail.com"));
+    }
+
+    #[test]
+    fn test_format_google_validation_url_ignores_non_google_or_empty() {
+        let raw = "https://example.com/verify?code=123";
+        assert_eq!(format_google_validation_url(raw, "target@gmail.com"), raw);
+        assert_eq!(format_google_validation_url(raw, ""), raw);
+
+        let fake_host = "https://evil-google.com/signin?authuser";
+        assert_eq!(format_google_validation_url(fake_host, "target@gmail.com"), fake_host);
+
+        let query_substr = "https://attacker.com/login?redirect=accounts.google.com&authuser";
+        assert_eq!(format_google_validation_url(query_substr, "target@gmail.com"), query_substr);
+    }
+}
+

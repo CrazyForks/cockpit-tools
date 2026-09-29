@@ -344,7 +344,8 @@
         "unlimited": "Bez limitu",
         "leftPercent": "Pozostało {{value}}%",
         "cachedRefreshFailed": "Odświeżanie nie powiodło się; wyświetlam ostatnie poprawne dane",
-        "lastSuccessfulQuery": "Ostatni sukces: {{time}}"
+        "lastSuccessfulQuery": "Ostatni sukces: {{time}}",
+        "cachedNeedsReauth": "⚠️ Wymagana weryfikacja internetowa, aby kontynuować (dane z pamięci podręcznej poniżej)"
       },
       "subtitle": "Zarządzaj kontami GitHub Copilot",
       "time": {
@@ -1479,7 +1480,9 @@
       "normal": "Normalne",
       "forbidden": "403​",
       "forbidden_tooltip": "API zwróciło 403 Forbidden, konto nie ma dostępu do Gemini Code Assist",
-      "forbidden_msg": "Konto zabronione, pominięto automatyczne odświeżanie"
+      "forbidden_msg": "Konto zabronione, pominięto automatyczne odświeżanie",
+      "needsReauth": "Wymagana weryfikacja internetowa",
+      "needsReauthTooltip": "Google wymaga weryfikacji bezpieczeństwa w sieci, aby kontynuować"
     },
     "tier": {
       "pro": "PRO​",
@@ -1614,7 +1617,12 @@
       "delete": "Usuń",
       "deleteSelected": "Usuń zaznaczone",
       "export": "Eksportuj",
-      "refreshAll": "Odśwież wszystko"
+      "refreshAll": "Odśwież wszystko",
+      "reauth": "Autoryzuj ponownie",
+      "reauthTooltip": "Google wymaga ponownej weryfikacji, kliknij aby autoryzować ponownie",
+      "openValidationUrl": "Weryfikacja internetowa",
+      "copyValidationUrl": "Kopiuj link do weryfikacji",
+      "copyValidationUrlTooltip": "Kopiuj adres weryfikacji internetowej"
     },
     "tabs": {
       "oauth": "Autoryzacja OAuth",

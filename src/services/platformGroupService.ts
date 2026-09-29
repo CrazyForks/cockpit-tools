@@ -175,6 +175,22 @@ export function reorderPlatformGroups(
   });
 }
 
+export function setPlatformGroupAccounts(
+  platform: string,
+  groupId: string,
+  accountIds: string[]
+): Promise<AccountGroup | null> {
+  return enqueue(async () => {
+    const key = normalizePlatform(platform);
+    const groups = await loadGroupsInternal(key);
+    const group = groups.find((g) => g.id === groupId);
+    if (!group) return null;
+    group.accountIds = Array.from(new Set(accountIds));
+    await saveGroupsInternal(key, groups);
+    return group;
+  });
+}
+
 export function assignAccountsToPlatformGroup(
   platform: string,
   groupId: string,
@@ -185,12 +201,6 @@ export function assignAccountsToPlatformGroup(
     const groups = await loadGroupsInternal(key);
     const group = groups.find((g) => g.id === groupId);
     if (!group) return null;
-    const targetIds = new Set(accountIds);
-
-    for (const currentGroup of groups) {
-      if (currentGroup.id === groupId) continue;
-      currentGroup.accountIds = currentGroup.accountIds.filter((id) => !targetIds.has(id));
-    }
 
     const existing = new Set(group.accountIds);
     for (const id of accountIds) {

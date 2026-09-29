@@ -349,7 +349,8 @@
         "unlimited": "Quota illimitata",
         "leftPercent": "{{value}}% rimanente",
         "cachedRefreshFailed": "Aggiornamento non riuscito; vengono mostrati gli ultimi dati validi",
-        "lastSuccessfulQuery": "Ultimo successo: {{time}}"
+        "lastSuccessfulQuery": "Ultimo successo: {{time}}",
+        "cachedNeedsReauth": "⚠️ Verifica web richiesta per continuare (dati memorizzati nella cache sotto)"
       },
       "subtitle": "Gestisci i tuoi account GitHub Copilot",
       "time": {
@@ -1479,7 +1480,9 @@
       "normal": "Normale",
       "forbidden": "403​",
       "forbidden_tooltip": "API ha restituito 403 Forbidden, l'account non ha accesso a Gemini Code Assist",
-      "forbidden_msg": "Account vietato, aggiornamento automatico saltato"
+      "forbidden_msg": "Account vietato, aggiornamento automatico saltato",
+      "needsReauth": "Verifica web richiesta",
+      "needsReauthTooltip": "Google richiede la verifica di sicurezza web per continuare"
     },
     "tier": {
       "pro": "PRO​",
@@ -1614,7 +1617,12 @@
       "delete": "Elimina",
       "deleteSelected": "Elimina selezionati",
       "export": "Esporta",
-      "refreshAll": "Aggiorna tutto"
+      "refreshAll": "Aggiorna tutto",
+      "reauth": "Riautorizza",
+      "reauthTooltip": "Google richiede una nuova verifica, fai clic per riautorizzare",
+      "openValidationUrl": "Verifica web",
+      "copyValidationUrl": "Copia link di verifica",
+      "copyValidationUrlTooltip": "Copia indirizzo di verifica web"
     },
     "tabs": {
       "oauth": "Autorizzazione OAuth",

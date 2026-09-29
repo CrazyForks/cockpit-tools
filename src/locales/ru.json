@@ -349,7 +349,8 @@
         "unlimited": "Безлимитная квота",
         "leftPercent": "Осталось {{value}}%",
         "cachedRefreshFailed": "Не удалось обновить; показаны последние успешно полученные данные",
-        "lastSuccessfulQuery": "Последний успех: {{time}}"
+        "lastSuccessfulQuery": "Последний успех: {{time}}",
+        "cachedNeedsReauth": "⚠️ Требуется веб-проверка для продолжения (ниже кэшированные данные)"
       },
       "subtitle": "Управляйте аккаунтами GitHub Copilot",
       "time": {
@@ -1479,7 +1480,9 @@
       "normal": "Нормальный",
       "forbidden": "403​",
       "forbidden_tooltip": "API вернул 403 Forbidden, аккаунт не имеет доступа к Gemini Code Assist",
-      "forbidden_msg": "Аккаунт запрещён, автообновление пропущено"
+      "forbidden_msg": "Аккаунт запрещён, автообновление пропущено",
+      "needsReauth": "Требуется веб-проверка",
+      "needsReauthTooltip": "Google запрашивает проверку безопасности в браузере для продолжения"
     },
     "tier": {
       "pro": "PRO​",
@@ -1614,7 +1617,12 @@
       "delete": "Удалить",
       "deleteSelected": "Удалить выбранные",
       "export": "Экспорт",
-      "refreshAll": "Обновить всё"
+      "refreshAll": "Обновить всё",
+      "reauth": "Повторная авторизация",
+      "reauthTooltip": "Google запрашивает повторную проверку, нажмите для повторной авторизации",
+      "openValidationUrl": "Веб-проверка",
+      "copyValidationUrl": "Копировать ссылку для проверки",
+      "copyValidationUrlTooltip": "Копировать адрес веб-проверки"
     },
     "tabs": {
       "oauth": "OAuth авторизация",
