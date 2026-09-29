@@ -21,6 +21,13 @@ import {
 import { invalidateCache as invalidateLegacyCache } from '../services/accountGroupService';
 import { listAccounts } from '../services/accountService';
 import { getAntigravityTierBadge } from '../utils/account';
+import { SingleSelectDropdown } from './SingleSelectDropdown';
+import {
+  setCodexGroupQuotaAutoRefreshMinutes,
+  resolveCodexGroupQuotaAutoRefreshMinutes,
+  normalizeCodexGroupQuotaAutoRefreshMinutes,
+  type CodexGroupQuotaAutoRefreshMinutes,
+} from '../services/codexAccountGroupService';
 import { useEscClose } from '../hooks/useEscClose';
 import './AccountGroupModal.css';
 import './GroupAccountPickerModal.css';
@@ -88,6 +95,16 @@ export const AccountGroupModal = ({
   const [error, setError] = useState<string | null>(null);
   const [pickerTargetGroup, setPickerTargetGroup] = useState<AccountGroup | null>(null);
   const [loadedAccounts, setLoadedAccounts] = useState<Array<{ id: string; [key: string]: any }>>([]);
+  const [fieldError, setFieldError] = useState<{ id: string; message: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const errorRef = useRef<HTMLDivElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const [quotaCustomModeId, setQuotaCustomModeId] = useState<string | null>(null);
+  const [quotaCustomDraft, setQuotaCustomDraft] = useState('5');
+  const loadGeneration = useRef(0);
 
   const listRef = useRef<HTMLDivElement>(null);
   const dragSourceIndexRef = useRef<number | null>(null);
@@ -95,9 +112,34 @@ export const AccountGroupModal = ({
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
+  const clearErrors = () => {
+    setError(null);
+    setFieldError(null);
+  };
+
   const reload = useCallback(async () => {
-    setGroups(await getPlatformGroups(platformKey));
+    const generation = loadGeneration.current;
+    const nextGroups = await getPlatformGroups(platformKey);
+    if (generation === loadGeneration.current) setGroups(nextGroups);
   }, [platformKey]);
+
+  const loadGroups = useCallback(async () => {
+    const generation = ++loadGeneration.current;
+    setLoading(true);
+    setError(null);
+    setFieldError(null);
+    try {
+      await reload();
+      if (generation === loadGeneration.current) setLoadFailed(false);
+    } catch (err) {
+      if (generation === loadGeneration.current) {
+        setLoadFailed(true);
+        setError(`${t('common.failed')}: ${String(err)}`);
+      }
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false);
+    }
+  }, [reload, t]);
 
   useEffect(() => {
     if (accounts && accounts.length > 0) {
@@ -111,30 +153,61 @@ export const AccountGroupModal = ({
 
   useEffect(() => {
     if (isOpen) {
-      reload();
+      setGroups([]);
+      void loadGroups();
       setNewName('');
       setRenamingId(null);
       setDeleteConfirmId(null);
       setPickerTargetGroup(null);
+      setQuotaCustomModeId(null);
       dragSourceIndexRef.current = null;
       dragStartPosRef.current = null;
       setDraggingIndex(null);
       setDragOverIndex(null);
-      setError(null);
     }
-  }, [isOpen, reload]);
+    return () => { loadGeneration.current += 1; };
+  }, [isOpen, loadGroups]);
+
+  useEffect(() => {
+    const target = fieldError
+      ? Array.from(modalRef.current?.querySelectorAll<HTMLElement>('[data-error-field]') ?? [])
+        .find((element) => element.dataset.errorField === fieldError.id)
+      : errorRef.current;
+    if (error || fieldError) {
+      target?.scrollIntoView({ block: 'nearest' });
+      target?.focus({ preventScroll: true });
+    }
+  }, [error, fieldError]);
+
+  const runMutation = async (operation: () => Promise<void>, errorKey: string) => {
+    if (busyRef.current || loading || loadFailed) return;
+    busyRef.current = true;
+    setBusy(true);
+    clearErrors();
+    try {
+      await operation();
+      await onGroupsChanged();
+    } catch (err) {
+      setError(errorKey === 'common.failed'
+        ? `${t(errorKey)}: ${String(err)}`
+        : t(errorKey, { error: String(err) }));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  const saveOrder = async (nextGroups: AccountGroup[]) => {
+    await runMutation(async () => {
+      setGroups(await reorderPlatformGroups(platformKey, nextGroups.map((group) => group.id)));
+    }, 'common.failed');
+  };
 
   const handleItemPointerDown = (e: React.PointerEvent, index: number) => {
-    if (e.button !== 0) return;
-    if (renamingId !== null) return;
+    if (e.button !== 0 || busyRef.current || loading || loadFailed || renamingId !== null) return;
     const target = e.target as HTMLElement;
-    if (target.closest('button, input, textarea, .group-actions, .group-filter-checkbox')) {
-      return;
-    }
-
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {}
+    if (target.closest('button, input, textarea, .group-actions, .group-modal-item-meta')) return;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* Capture is optional. */ }
     dragSourceIndexRef.current = index;
     dragStartPosRef.current = { x: e.clientX, y: e.clientY };
   };
@@ -143,150 +216,115 @@ export const AccountGroupModal = ({
     if (dragSourceIndexRef.current === null || !dragStartPosRef.current) return;
     const dist = Math.hypot(e.clientX - dragStartPosRef.current.x, e.clientY - dragStartPosRef.current.y);
     if (dist > 4) {
-      if (draggingIndex === null) {
-        setDraggingIndex(dragSourceIndexRef.current);
-      }
+      if (draggingIndex === null) setDraggingIndex(dragSourceIndexRef.current);
       const idx = getGroupIndexAtPoint(e.clientX, e.clientY, listRef.current);
-      if (idx !== null && idx !== dragOverIndex) {
-        setDragOverIndex(idx);
-      }
-    }
-  };
-
-  const handleItemPointerUp = async (e: React.PointerEvent) => {
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {}
-
-    const sourceIdx = dragSourceIndexRef.current;
-    const targetIdx = dragOverIndex;
-
-    dragSourceIndexRef.current = null;
-    dragStartPosRef.current = null;
-    setDraggingIndex(null);
-    setDragOverIndex(null);
-
-    if (sourceIdx !== null && targetIdx !== null && sourceIdx !== targetIdx && targetIdx >= 0 && targetIdx < groups.length) {
-      const nextGroups = [...groups];
-      const [moved] = nextGroups.splice(sourceIdx, 1);
-      nextGroups.splice(targetIdx, 0, moved);
-      setGroups(nextGroups);
-      try {
-        await reorderPlatformGroups(platformKey, nextGroups.map((g) => g.id));
-        if (platformKey === 'antigravity') {
-          invalidateLegacyCache();
-        }
-        await onGroupsChanged();
-      } catch (err) {
-        console.error('Failed to reorder groups:', err);
-        await reload();
-      }
+      if (idx !== null && idx !== dragOverIndex) setDragOverIndex(idx);
     }
   };
 
   const handleItemPointerCancel = (e: React.PointerEvent) => {
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {}
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* Capture may already be released. */ }
     dragSourceIndexRef.current = null;
     dragStartPosRef.current = null;
     setDraggingIndex(null);
     setDragOverIndex(null);
+  };
+
+  const handleItemPointerUp = async (e: React.PointerEvent) => {
+    const sourceIdx = dragSourceIndexRef.current;
+    const targetIdx = dragOverIndex;
+    handleItemPointerCancel(e);
+    if (sourceIdx !== null && targetIdx !== null && sourceIdx !== targetIdx && targetIdx >= 0 && targetIdx < groups.length) {
+      const nextGroups = [...groups];
+      const [moved] = nextGroups.splice(sourceIdx, 1);
+      nextGroups.splice(targetIdx, 0, moved);
+      await saveOrder(nextGroups);
+    }
   };
 
   const handleMove = async (index: number, direction: 'up' | 'down') => {
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= groups.length) return;
     const nextGroups = [...groups];
-    const temp = nextGroups[index];
-    nextGroups[index] = nextGroups[targetIndex];
-    nextGroups[targetIndex] = temp;
-    setGroups(nextGroups);
-    try {
-      await reorderPlatformGroups(platformKey, nextGroups.map((g) => g.id));
-      if (platformKey === 'antigravity') {
-        invalidateLegacyCache();
-      }
-      await onGroupsChanged();
-    } catch (err) {
-      console.error('Failed to move group:', err);
-      await reload();
-    }
+    [nextGroups[index], nextGroups[targetIndex]] = [nextGroups[targetIndex], nextGroups[index]];
+    await saveOrder(nextGroups);
   };
 
   const handleCreate = async () => {
     const name = newName.trim();
-    if (!name) return;
-    setError(null);
-    try {
-      // 重名检查
-      if (groups.some((g) => g.name === name)) {
-        setError(t('accounts.groups.error.duplicate'));
-        return;
-      }
+    if (!name || busyRef.current || loading || loadFailed) return;
+    clearErrors();
+    if (groups.some((group) => group.name === name)) {
+      setFieldError({ id: 'new', message: t('accounts.groups.error.duplicate') });
+      return;
+    }
+    await runMutation(async () => {
       await createPlatformGroup(platformKey, name);
-      if (platformKey === 'antigravity') {
-        invalidateLegacyCache();
-      }
       setNewName('');
       await reload();
-      await onGroupsChanged();
-    } catch (err) {
-      console.error('Failed to create group:', err);
-      setError(t('accounts.groups.error.createFailed', {
-        error: String(err),
-      }));
-    }
+    }, 'accounts.groups.error.createFailed');
   };
 
   const handleRename = async (groupId: string) => {
     const name = renameValue.trim();
-    if (!name) return;
-    setError(null);
-    try {
-      // 重名检查（排除自己）
-      if (groups.some((g) => g.id !== groupId && g.name === name)) {
-        setError(t('accounts.groups.error.duplicate'));
-        return;
-      }
+    if (!name || busyRef.current || loading || loadFailed) return;
+    clearErrors();
+    if (groups.some((group) => group.id !== groupId && group.name === name)) {
+      setFieldError({ id: groupId, message: t('accounts.groups.error.duplicate') });
+      return;
+    }
+    await runMutation(async () => {
       await renamePlatformGroup(platformKey, groupId, name);
-      if (platformKey === 'antigravity') {
-        invalidateLegacyCache();
-      }
       setRenamingId(null);
       await reload();
-      await onGroupsChanged();
-    } catch (err) {
-      console.error('Failed to rename group:', err);
-      setError(t('accounts.groups.error.renameFailed', {
-        error: String(err),
-      }));
-    }
+    }, 'accounts.groups.error.renameFailed');
   };
 
   const handleDelete = async (groupId: string) => {
-    setError(null);
-    try {
+    await runMutation(async () => {
       await deletePlatformGroup(platformKey, groupId);
-      if (platformKey === 'antigravity') {
-        invalidateLegacyCache();
-      }
       setDeleteConfirmId(null);
       await reload();
-      await onGroupsChanged();
-    } catch (err) {
-      console.error('Failed to delete group:', err);
-      setError(t('accounts.groups.error.deleteFailed', {
-        error: String(err),
-      }));
-    }
+    }, 'accounts.groups.error.deleteFailed');
   };
+
+  const applyQuotaMinutes = async (group: AccountGroup, minutes: CodexGroupQuotaAutoRefreshMinutes) => {
+    await runMutation(async () => {
+      const updated = await setCodexGroupQuotaAutoRefreshMinutes(group.id, minutes);
+      if (!updated) throw new Error(t('accounts.groups.error.notFound'));
+      setGroups((previous) => previous.map((item) => item.id === group.id ? updated : item));
+      setQuotaCustomModeId(null);
+    }, 'accounts.groups.error.quotaRefreshFailed');
+  };
+
+  const handleQuotaSelectChange = (group: AccountGroup, value: string) => {
+    clearErrors();
+    if (value === 'custom') {
+      const current = resolveCodexGroupQuotaAutoRefreshMinutes(group as AccountGroup & { quotaAutoRefreshMinutes?: unknown });
+      setQuotaCustomDraft(typeof current === 'number' && current > 0 ? String(current) : '5');
+      setQuotaCustomModeId(group.id);
+      return;
+    }
+    void applyQuotaMinutes(group, value === 'inherit' ? null : Number(value));
+  };
+
+  const handleQuotaCustomApply = (group: AccountGroup) => {
+    const normalized = normalizeCodexGroupQuotaAutoRefreshMinutes(quotaCustomDraft);
+    void applyQuotaMinutes(group, normalized === null || normalized === -1 ? 5 : normalized);
+  };
+
+  const quotaSelectOptions = [
+    { value: 'inherit', label: t('accounts.groups.quotaRefreshInherit') },
+    { value: '-1', label: t('settings.general.autoRefreshDisabled') },
+    ...[2, 5, 10, 15].map((minutes) => ({ value: String(minutes), label: `${minutes} ${t('settings.general.minutes')}` })),
+    { value: 'custom', label: t('settings.general.autoRefreshCustom') },
+  ];
 
   if (!isOpen) return null;
 
   return (
     <div className="modal-overlay">
-      <div className="modal account-group-modal" onClick={(e) => e.stopPropagation()}>
+      <div ref={modalRef} className="modal account-group-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>
             <FolderOpen size={18} />
@@ -302,8 +340,11 @@ export const AccountGroupModal = ({
           <div className="group-create-row">
             <input
               type="text"
+              data-error-field="new"
+              aria-invalid={fieldError?.id === 'new'}
+              disabled={busy || loading || loadFailed}
               value={newName}
-              onChange={(e) => setNewName(e.target.value)}
+              onChange={(e) => { setNewName(e.target.value); clearErrors(); }}
               onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); }}
               placeholder={t('accounts.groups.newPlaceholder')}
               maxLength={30}
@@ -311,30 +352,39 @@ export const AccountGroupModal = ({
             <button
               className="btn btn-primary"
               onClick={handleCreate}
-              disabled={!newName.trim()}
+              disabled={busy || loading || loadFailed || !newName.trim()}
             >
               <Plus size={14} />
               {t('accounts.groups.create')}
             </button>
           </div>
 
+          {fieldError?.id === 'new' && <div className="group-field-error" role="alert">{fieldError.message}</div>}
+
           {/* 错误提示 */}
           {error && (
-            <div className="group-modal-error">
+            <div className="group-modal-error" ref={errorRef} tabIndex={-1} role="alert">
               <AlertCircle size={14} />
               <span>{error}</span>
+              {loadFailed && <button className="btn btn-secondary" disabled={loading} onClick={() => void loadGroups()}>{t('common.retry')}</button>}
             </div>
           )}
 
           {/* 分组列表 */}
-          {groups.length === 0 ? (
+          {loading ? <div role="status">{t('common.loading')}</div> : !loadFailed && groups.length === 0 ? (
             <div className="group-modal-empty">
               <FolderPlus size={36} />
               <div>{t('accounts.groups.empty')}</div>
             </div>
           ) : (
             <div className="group-modal-list" ref={listRef}>
-              {groups.map((group, index) => (
+              {groups.map((group, index) => {
+                const quotaMinutes = resolveCodexGroupQuotaAutoRefreshMinutes(group as AccountGroup & { quotaAutoRefreshMinutes?: unknown });
+                const quotaValue = quotaMinutes === null ? 'inherit' : String(quotaMinutes);
+                const quotaOptions = quotaSelectOptions.some((option) => option.value === quotaValue)
+                  ? quotaSelectOptions
+                  : [{ value: quotaValue, label: `${quotaMinutes} ${t('settings.general.minutes')}` }, ...quotaSelectOptions];
+                return (
                 <div
                   key={group.id}
                   data-group-index={index}
@@ -358,13 +408,15 @@ export const AccountGroupModal = ({
                       {renamingId === group.id ? (
                         <input
                           className="group-rename-input"
+                          data-error-field={group.id}
+                          aria-invalid={fieldError?.id === group.id}
+                          disabled={busy || loading || loadFailed}
                           value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
+                          onChange={(e) => { setRenameValue(e.target.value); clearErrors(); }}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') handleRename(group.id);
-                            if (e.key === 'Escape') setRenamingId(null);
+                            if (e.key === 'Escape') { e.stopPropagation(); clearErrors(); setRenamingId(null); }
                           }}
-                          onBlur={() => handleRename(group.id)}
                           autoFocus
                           maxLength={30}
                         />
@@ -378,12 +430,16 @@ export const AccountGroupModal = ({
                           </span>
                         </>
                       )}
+                      {fieldError?.id === group.id && <span className="group-field-error" role="alert">{fieldError.message}</span>}
                     </div>
                     <div className="group-actions">
-                      {deleteConfirmId === group.id ? (
+                      {renamingId === group.id ? (
+                        <><button className="group-action-btn" disabled={busy} onClick={() => void handleRename(group.id)} title={t('common.confirm')}>✓</button><button className="group-action-btn" disabled={busy} onClick={() => { clearErrors(); setRenamingId(null); }} title={t('common.cancel')}>✗</button></>
+                      ) : deleteConfirmId === group.id ? (
                         <>
                           <button
                             className="group-action-btn danger"
+                            disabled={busy || loading || loadFailed}
                             onClick={() => handleDelete(group.id)}
                             title={t('common.confirm')}
                           >
@@ -391,7 +447,8 @@ export const AccountGroupModal = ({
                           </button>
                           <button
                             className="group-action-btn"
-                            onClick={() => setDeleteConfirmId(null)}
+                            disabled={busy || loading || loadFailed}
+                            onClick={() => { clearErrors(); setDeleteConfirmId(null); }}
                             title={t('common.cancel')}
                           >
                             ✗
@@ -402,6 +459,7 @@ export const AccountGroupModal = ({
                           <button
                             type="button"
                             className="group-action-btn add-btn"
+                            disabled={busy || loading || loadFailed}
                             onClick={() => {
                               if (onAddAccounts) {
                                 onAddAccounts(group);
@@ -417,7 +475,7 @@ export const AccountGroupModal = ({
                           <button
                             type="button"
                             className="group-action-btn"
-                            disabled={index === 0}
+                            disabled={busy || loading || loadFailed || index === 0}
                             onClick={() => handleMove(index, 'up')}
                             title={t('accounts.groups.moveUp', '上移')}
                           >
@@ -426,7 +484,7 @@ export const AccountGroupModal = ({
                           <button
                             type="button"
                             className="group-action-btn"
-                            disabled={index === groups.length - 1}
+                            disabled={busy || loading || loadFailed || index === groups.length - 1}
                             onClick={() => handleMove(index, 'down')}
                             title={t('accounts.groups.moveDown', '下移')}
                           >
@@ -434,7 +492,9 @@ export const AccountGroupModal = ({
                           </button>
                           <button
                             className="group-action-btn"
+                            disabled={busy || loading || loadFailed}
                             onClick={() => {
+                              clearErrors();
                               setRenamingId(group.id);
                               setRenameValue(group.name);
                             }}
@@ -444,7 +504,8 @@ export const AccountGroupModal = ({
                           </button>
                           <button
                             className="group-action-btn danger"
-                            onClick={() => setDeleteConfirmId(group.id)}
+                            disabled={busy || loading || loadFailed}
+                            onClick={() => { clearErrors(); setDeleteConfirmId(group.id); }}
                             title={t('common.delete')}
                           >
                             <Trash2 size={14} />
@@ -453,8 +514,32 @@ export const AccountGroupModal = ({
                       )}
                     </div>
                   </div>
+                  {platformKey === 'codex' && (
+                    <div className="group-modal-item-meta">
+                      <span className="group-quota-meta-label" title={t('accounts.groups.quotaRefreshPolicyHint')}>{t('accounts.groups.quotaRefresh')}</span>
+                      {quotaCustomModeId === group.id ? (
+                        <div className="group-quota-custom-input">
+                          <input type="number" min={1} max={999} className="group-quota-custom-field"
+                            value={quotaCustomDraft} disabled={busy || loading || loadFailed}
+                            aria-label={t('accounts.groups.quotaRefresh')}
+                            onChange={(event) => { clearErrors(); setQuotaCustomDraft(event.target.value.replace(/[^\d]/g, '')); }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') { event.preventDefault(); handleQuotaCustomApply(group); }
+                              if (event.key === 'Escape') { event.stopPropagation(); clearErrors(); setQuotaCustomModeId(null); }
+                            }} autoFocus />
+                          <span className="group-quota-unit">{t('settings.general.minutes')}</span>
+                          <button className="group-action-btn" disabled={busy} title={t('common.confirm')} onClick={() => handleQuotaCustomApply(group)}>✓</button>
+                          <button className="group-action-btn" disabled={busy} title={t('common.cancel')} onClick={() => { clearErrors(); setQuotaCustomModeId(null); }}>✗</button>
+                        </div>
+                      ) : <SingleSelectDropdown className="group-quota-dropdown" menuClassName="group-quota-dropdown-menu"
+                        value={quotaValue} options={quotaOptions} disabled={busy || loading || loadFailed || deleteConfirmId === group.id}
+                        ariaLabel={t('accounts.groups.quotaRefresh')} menuWidth={168} menuMaxHeight={260}
+                        onChange={(value) => handleQuotaSelectChange(group, value)} />}
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -797,50 +882,96 @@ export const AddToGroupModal = ({ isOpen, onClose, accountIds, sourceGroupId, on
   const [groups, setGroups] = useState<AccountGroup[]>([]);
   const [newName, setNewName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [fieldError, setFieldError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const errorRef = useRef<HTMLDivElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const loadGeneration = useRef(0);
+  // If assignment fails after creation, retry the same group instead of creating another.
+  const createdGroupRef = useRef<AccountGroup | null>(null);
+
+  const clearErrors = () => { setError(null); setFieldError(null); };
+  const loadGroups = useCallback(async () => {
+    const generation = ++loadGeneration.current;
+    setLoading(true);
+    setError(null);
+    setFieldError(null);
+    try {
+      const loaded = await getPlatformGroups(platformKey);
+      if (generation === loadGeneration.current) {
+        setGroups(loaded);
+        setLoadFailed(false);
+      }
+    } catch (err) {
+      if (generation === loadGeneration.current) {
+        setLoadFailed(true);
+        setError(`${t('common.failed')}: ${String(err)}`);
+      }
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false);
+    }
+  }, [platformKey, t]);
 
   useEffect(() => {
     if (isOpen) {
-      (async () => setGroups(await getPlatformGroups(platformKey)))();
+      setGroups([]);
       setNewName('');
-      setError(null);
+      createdGroupRef.current = null;
+      void loadGroups();
     }
-  }, [isOpen, platformKey]);
+    return () => { loadGeneration.current += 1; };
+  }, [isOpen, loadGroups]);
 
-  const handleSelect = async (groupId: string) => {
-    setError(null);
+  useEffect(() => {
+    const target = fieldError ? nameRef.current : errorRef.current;
+    if (fieldError || error) {
+      target?.scrollIntoView({ block: 'nearest' });
+      target?.focus({ preventScroll: true });
+    }
+  }, [fieldError, error]);
+
+  const runAssignment = async (operation: () => Promise<string>, errorKey: string) => {
+    if (busyRef.current || loading || loadFailed) return;
+    busyRef.current = true;
+    setBusy(true);
+    clearErrors();
     try {
-      await assignAccountsToPlatformGroup(platformKey, groupId, accountIds);
-      if (platformKey === 'antigravity') {
-        invalidateLegacyCache();
-      }
+      const groupId = await operation();
+      const updated = await assignAccountsToPlatformGroup(platformKey, groupId, accountIds);
+      if (!updated) throw new Error(t('accounts.groups.error.notFound'));
       await onAdded();
       onClose();
     } catch (err) {
-      console.error('Failed to add accounts to group:', err);
-      setError(t('accounts.groups.error.addFailed', {
-        error: String(err),
-      }));
+      setError(t(errorKey, { error: String(err) }));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
     }
+  };
+
+  const handleSelect = async (groupId: string) => {
+    await runAssignment(async () => groupId, 'accounts.groups.error.addFailed');
   };
 
   const handleCreateAndAdd = async () => {
     const name = newName.trim();
-    if (!name) return;
-    setError(null);
-    try {
-      const group = await createPlatformGroup(platformKey, name);
-      await assignAccountsToPlatformGroup(platformKey, group.id, accountIds);
-      if (platformKey === 'antigravity') {
-        invalidateLegacyCache();
-      }
-      await onAdded();
-      onClose();
-    } catch (err) {
-      console.error('Failed to create group and add accounts:', err);
-      setError(t('accounts.groups.error.createAndAddFailed', {
-        error: String(err),
-      }));
+    if (!name || busyRef.current || loading || loadFailed) return;
+    clearErrors();
+    const created = createdGroupRef.current;
+    if (groups.some((group) => group.name === name && group.id !== created?.id)) {
+      setFieldError(t('accounts.groups.error.duplicate'));
+      return;
     }
+    await runAssignment(async () => {
+      if (created?.name === name) return created.id;
+      const group = await createPlatformGroup(platformKey, name);
+      createdGroupRef.current = group;
+      setGroups((previous) => [...previous, group]);
+      return group.id;
+    }, 'accounts.groups.error.createAndAddFailed');
   };
 
   if (!isOpen) return null;
@@ -862,8 +993,11 @@ export const AddToGroupModal = ({ isOpen, onClose, accountIds, sourceGroupId, on
           <div className="group-create-row">
             <input
               type="text"
+              ref={nameRef}
+              aria-invalid={Boolean(fieldError)}
+              disabled={busy || loading || loadFailed}
               value={newName}
-              onChange={(e) => setNewName(e.target.value)}
+              onChange={(e) => { setNewName(e.target.value); clearErrors(); }}
               onKeyDown={(e) => { if (e.key === 'Enter') handleCreateAndAdd(); }}
               placeholder={t('accounts.groups.createAndAdd')}
               maxLength={30}
@@ -871,16 +1005,28 @@ export const AddToGroupModal = ({ isOpen, onClose, accountIds, sourceGroupId, on
             <button
               className="btn btn-primary"
               onClick={handleCreateAndAdd}
-              disabled={!newName.trim()}
+              disabled={busy || loading || loadFailed || !newName.trim()}
             >
               <Plus size={14} />
             </button>
           </div>
 
+          {fieldError && <div className="group-field-error" role="alert">{fieldError}</div>}
+          {error && (
+            <div className="group-modal-error" ref={errorRef} role="alert" tabIndex={-1}>
+              <AlertCircle size={14} />
+              <span>{error}</span>
+              {loadFailed && <button className="btn btn-secondary" disabled={loading} onClick={() => void loadGroups()}>{t('common.retry')}</button>}
+            </div>
+          )}
+          {loading && <div role="status">{t('common.loading')}</div>}
+
           {groups.length > 0 && (
             <div className="add-to-group-list">
               {groups.filter((g) => g.id !== sourceGroupId).map((group) => (
-                <div
+                <button
+                  type="button"
+                  disabled={busy || loading || loadFailed}
                   key={group.id}
                   className="add-to-group-item"
                   onClick={() => handleSelect(group.id)}
@@ -890,18 +1036,11 @@ export const AddToGroupModal = ({ isOpen, onClose, accountIds, sourceGroupId, on
                   <span className="group-count">
                     {group.accountIds.length}
                   </span>
-                </div>
+                </button>
               ))}
             </div>
           )}
 
-          {/* 错误提示 */}
-          {error && (
-            <div className="group-modal-error">
-              <AlertCircle size={14} />
-              <span>{error}</span>
-            </div>
-          )}
         </div>
       </div>
     </div>

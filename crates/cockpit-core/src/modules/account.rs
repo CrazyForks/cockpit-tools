@@ -391,55 +391,6 @@ pub fn build_account_storage_id(email: &str) -> String {
     format!("antigravity_{:x}", md5::compute(seed.as_bytes()))
 }
 
-/// 将分组中旧账号 ID 迁移为新规范 ID
-pub fn migrate_account_id_in_groups(old_id: &str, new_id: &str) -> Result<(), String> {
-    if old_id == new_id {
-        return Ok(());
-    }
-    let data_dir = get_data_dir()?;
-    let groups_path = data_dir.join("account_groups.json");
-    if !groups_path.exists() {
-        return Ok(());
-    }
-    let content = match fs::read_to_string(&groups_path) {
-        Ok(c) => c,
-        Err(_) => return Ok(()),
-    };
-    let mut value: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
-    };
-    let Some(groups) = value.as_array_mut() else {
-        return Ok(());
-    };
-    let mut changed = false;
-    for group in groups {
-        if let Some(account_ids) = group.get_mut("accountIds").and_then(|v| v.as_array_mut()) {
-            let mut new_ids: Vec<serde_json::Value> = Vec::new();
-            let mut seen: HashSet<String> = HashSet::new();
-            for item in account_ids.drain(..) {
-                let id_str = item.as_str().unwrap_or("").to_string();
-                let actual_id = if id_str == old_id {
-                    changed = true;
-                    new_id.to_string()
-                } else {
-                    id_str
-                };
-                if !actual_id.is_empty() && seen.insert(actual_id.clone()) {
-                    new_ids.push(serde_json::Value::String(actual_id));
-                }
-            }
-            *account_ids = new_ids;
-        }
-    }
-    if changed {
-        if let Ok(new_content) = serde_json::to_string_pretty(&value) {
-            let _ = crate::modules::atomic_write::write_string_atomic(&groups_path, &new_content);
-        }
-    }
-    Ok(())
-}
-
 fn find_matching_account_id(
     index: &AccountIndex,
     email: &str,
@@ -527,8 +478,6 @@ pub fn upsert_account(
         .lock()
         .map_err(|e| format!("获取锁失败: {}", e))?;
     let mut index = load_account_index()?;
-
-    let target_id = build_account_storage_id(&email);
     let existing_account_id = find_matching_account_id(&index, &email, &token)?
         .or_else(|| {
             index
@@ -538,150 +487,53 @@ pub fn upsert_account(
                 .map(|s| s.id.clone())
         });
 
-    if let Some(account_id) = existing_account_id {
-        let old_id = account_id.clone();
-        match load_account(&account_id) {
-            Ok(mut account) => {
-                let mut next_token = token;
-                if next_token.project_id.is_none() {
-                    next_token.project_id = account.token.project_id.clone();
-                }
-                if next_token.session_id.is_none() {
-                    next_token.session_id = account.token.session_id.clone();
-                }
-                account.token = next_token;
-                account.email = email.clone();
-                if name.is_some() {
-                    account.name = name.clone();
-                }
-                if account.disabled {
-                    account.disabled = false;
-                    account.disabled_reason = None;
-                    account.disabled_at = None;
-                } else if account.disabled_reason.as_deref() == Some("verification_required") {
-                    account.disabled_reason = None;
-                }
-                account.quota_error = None;
-                account.update_last_used();
-
-                if old_id != target_id {
-                    account.id = target_id.clone();
-                    save_account(&account)?;
-
-                    let accounts_dir = get_accounts_dir()?;
-                    let old_path = accounts_dir.join(format!("{}.json", old_id));
-                    if old_path.exists() {
-                        let _ = fs::remove_file(&old_path);
-                    }
-
-                    let mut found = false;
-                    index.accounts.retain(|s| {
-                        if s.id == old_id {
-                            false
-                        } else if s.id == target_id {
-                            found = true;
-                            true
-                        } else {
-                            true
-                        }
-                    });
-                    if !found {
-                        index.accounts.push(AccountSummary {
-                            id: target_id.clone(),
-                            email: account.email.clone(),
-                            name: account.name.clone(),
-                            created_at: account.created_at,
-                            last_used: account.last_used,
-                        });
-                    } else if let Some(s) = index.accounts.iter_mut().find(|s| s.id == target_id) {
-                        s.email = account.email.clone();
-                        if name.is_some() {
-                            s.name = name.clone();
-                        }
-                        s.last_used = account.last_used;
-                    }
-
-                    if index.current_account_id.as_deref() == Some(&old_id) {
-                        index.current_account_id = Some(target_id.clone());
-                    }
-                    save_account_index(&index)?;
-
-                    let _ = migrate_account_id_in_groups(&old_id, &target_id);
-                } else {
-                    save_account(&account)?;
-                    if let Some(idx_summary) = index.accounts.iter_mut().find(|s| s.id == target_id) {
-                        idx_summary.email = account.email.clone();
-                        if name.is_some() {
-                            idx_summary.name = name.clone();
-                        }
-                        idx_summary.last_used = account.last_used;
-                        save_account_index(&index)?;
-                    }
-                }
-
-                // 清理可能并存的同邮箱其他老 ID 文件和索引条目，彻底杜绝重复
-                let other_old_ids: Vec<String> = index
-                    .accounts
-                    .iter()
-                    .filter(|s| s.id != target_id && s.email.trim().eq_ignore_ascii_case(&email))
-                    .map(|s| s.id.clone())
-                    .collect();
-
-                for other_id in other_old_ids {
-                    let accounts_dir = get_accounts_dir()?;
-                    let other_path = accounts_dir.join(format!("{}.json", other_id));
-                    if other_path.exists() {
-                        let _ = fs::remove_file(&other_path);
-                    }
-                    index.accounts.retain(|s| s.id != other_id);
-                    let _ = migrate_account_id_in_groups(&other_id, &target_id);
-                }
-                let _ = save_account_index(&index);
-
-                return Ok(account);
-            }
-            Err(e) => {
-                modules::logger::log_warn(&format!("账号文件缺失，正在重建: {}", e));
-                let mut account = Account::new(target_id.clone(), email.clone(), token);
-                account.name = name.clone();
-                save_account(&account)?;
-
-                index.accounts.retain(|s| s.id != old_id && s.id != target_id);
-                index.accounts.push(AccountSummary {
-                    id: target_id.clone(),
-                    email: email.clone(),
-                    name: name.clone(),
-                    created_at: account.created_at,
-                    last_used: account.last_used,
-                });
-                if index.current_account_id.as_deref() == Some(&old_id) {
-                    index.current_account_id = Some(target_id.clone());
-                }
-                save_account_index(&index)?;
-                let _ = migrate_account_id_in_groups(&old_id, &target_id);
-
-                return Ok(account);
-            }
+    // Existing IDs are referenced by instances, wakeup tasks and groups. Reimport
+    // updates credentials in place; deterministic IDs apply only to new accounts.
+    let mut account = if let Some(account_id) = existing_account_id {
+        let mut account = load_account(&account_id)?;
+        let mut next_token = token;
+        if next_token.project_id.is_none() {
+            next_token.project_id = account.token.project_id.clone();
         }
+        if next_token.session_id.is_none() {
+            next_token.session_id = account.token.session_id.clone();
+        }
+        account.token = next_token;
+        account.email = email.clone();
+        if account.disabled {
+            account.disabled = false;
+            account.disabled_reason = None;
+            account.disabled_at = None;
+        } else if account.disabled_reason.as_deref() == Some("verification_required") {
+            account.disabled_reason = None;
+        }
+        account.quota_error = None;
+        account.update_last_used();
+        account
+    } else {
+        Account::new(build_account_storage_id(&email), email.clone(), token)
+    };
+    if name.is_some() {
+        account.name = name;
     }
-
-    let mut account = Account::new(target_id.clone(), email.clone(), token);
-    account.name = name.clone();
     save_account(&account)?;
-
-    index.accounts.retain(|s| s.id != target_id);
-    index.accounts.push(AccountSummary {
-        id: target_id.clone(),
-        email: email.clone(),
-        name: name.clone(),
-        created_at: account.created_at,
-        last_used: account.last_used,
-    });
+    if let Some(summary) = index.accounts.iter_mut().find(|item| item.id == account.id) {
+        summary.email = account.email.clone();
+        summary.name = account.name.clone();
+        summary.last_used = account.last_used;
+    } else {
+        index.accounts.push(AccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            name: account.name.clone(),
+            created_at: account.created_at,
+            last_used: account.last_used,
+        });
+    }
     if index.current_account_id.is_none() {
-        index.current_account_id = Some(target_id);
+        index.current_account_id = Some(account.id.clone());
     }
     save_account_index(&index)?;
-
     Ok(account)
 }
 
@@ -2312,6 +2164,7 @@ mod tests {
             .expect("second upsert");
 
         // 验证：ID 必须保持一致，卡片数量不能增加
+        assert_eq!(first.id, build_account_storage_id("user@example.com"));
         assert_eq!(second.id, first.id);
         let index = load_account_index().unwrap();
         assert_eq!(index.accounts.len(), 1);
@@ -2327,7 +2180,7 @@ mod tests {
     }
 
     #[test]
-    fn upsert_account_overwrites_legacy_uuid_account_with_same_email_and_migrates_id() {
+    fn upsert_account_preserves_legacy_id_and_all_existing_references() {
         let _lock = TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -2386,33 +2239,33 @@ mod tests {
             .expect("upsert account");
 
         let expected_canonical_id = build_account_storage_id("legacy.user@example.com");
-        assert_eq!(updated.id, expected_canonical_id);
+        assert_eq!(updated.id, legacy_id);
         assert_eq!(updated.token.refresh_token, "new-refresh-token");
         assert_eq!(updated.token.project_id.as_deref(), Some("old-proj"));
         assert_eq!(updated.notes.as_deref(), Some("Important Note"));
 
-        // 验证老 UUID 文件已被移除，新规范文件存在
+        // 旧文件和 ID 保留，不创建替代 ID，已有引用继续可解析。
         let accounts_dir = get_accounts_dir().unwrap();
-        assert!(!accounts_dir.join(format!("{}.json", legacy_id)).exists());
-        assert!(accounts_dir.join(format!("{}.json", expected_canonical_id)).exists());
+        assert!(accounts_dir.join(format!("{}.json", legacy_id)).exists());
+        assert!(!accounts_dir.join(format!("{}.json", expected_canonical_id)).exists());
 
-        // 验证索引更新为规范 ID，且只有一个账号
+        // 索引保持旧 ID，且不会增加重复账号
         let loaded_index = load_account_index().unwrap();
         assert_eq!(loaded_index.accounts.len(), 1);
-        assert_eq!(loaded_index.accounts[0].id, expected_canonical_id);
+        assert_eq!(loaded_index.accounts[0].id, legacy_id);
         assert_eq!(
             loaded_index.current_account_id.as_deref(),
-            Some(expected_canonical_id.as_str())
+            Some(legacy_id.as_str())
         );
 
-        // 验证分组自动迁移到了新规范 ID
+        // 原分组保持不变，不需要迁移
         let groups_str = std::fs::read_to_string(&groups_path).expect("read groups");
         let parsed_groups: serde_json::Value = serde_json::from_str(&groups_str).unwrap();
         let group_account_ids = parsed_groups[0]["accountIds"].as_array().unwrap();
         assert_eq!(group_account_ids.len(), 1);
         assert_eq!(
             group_account_ids[0].as_str(),
-            Some(expected_canonical_id.as_str())
+            Some(legacy_id.as_str())
         );
     }
 }

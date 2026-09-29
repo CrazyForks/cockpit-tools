@@ -43,7 +43,7 @@ function cloneGroups(groups: AccountGroup[]): AccountGroup[] {
   }));
 }
 
-function parseGroups(raw: string): AccountGroup[] {
+export function parseAccountGroups(raw: string): AccountGroup[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -88,7 +88,7 @@ function parseGroups(raw: string): AccountGroup[] {
 async function loadGroupsFromDisk(): Promise<AccountGroup[]> {
   try {
     const raw: string = await invoke('load_account_groups');
-    return parseGroups(raw);
+    return parseAccountGroups(raw);
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('[AccountGroups]')) {
       throw error;

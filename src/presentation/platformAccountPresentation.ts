@@ -162,15 +162,7 @@ export interface UnifiedQuotaMetric {
   left?: number;
   hintText?: string;
   windowStatsText?: string;
-  windowStats?: {
-    requestCount: number;
-    inputTokens: number;
-    cachedInputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-    estimatedCostUsd: number;
-    userCostUsd?: number | null;
-  };
+  windowStats?: import('../utils/codexWindowStats').CodexWindowStats;
 }
 
 export interface UnifiedAccountPresentation {

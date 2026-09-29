@@ -39,10 +39,17 @@ pub struct QuotaCloudCodeContext {
 impl QuotaCloudCodeContext {
     pub fn from_token(token: &TokenData) -> Self {
         Self {
-            preferred_project_id: token.project_id.clone(),
+            preferred_project_id: valid_cloud_code_project_id(token.project_id.as_deref())
+                .map(str::to_string),
             is_gcp_tos: token.is_gcp_tos.unwrap_or(false),
         }
     }
+}
+
+fn valid_cloud_code_project_id(project_id: Option<&str>) -> Option<&str> {
+    project_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "aicode-consumers")
 }
 
 fn env_var_trimmed(name: &str) -> Option<String> {
@@ -251,21 +258,43 @@ fn build_cloud_code_metadata(duet_project: Option<&str>) -> Value {
 }
 
 fn resolve_cloud_code_base_url(ctx: &QuotaCloudCodeContext) -> String {
-    // 与 Antigravity IDE.app 的 IYs(...) 选择顺序保持一致：override > gcpTos > internal(insider/dev) > daily
-    if let Some(override_url) = env_var_trimmed("ANTIGRAVITY_CLOUD_CODE_URL_OVERRIDE") {
-        return override_url;
+    select_cloud_code_base_url(
+        ctx,
+        env_var_trimmed("ANTIGRAVITY_CLOUD_CODE_URL_OVERRIDE").as_deref(),
+        env_bool("ANTIGRAVITY_IS_GOOGLE_INTERNAL"),
+        env_quality_is_insider_or_dev(),
+    )
+}
+
+fn select_cloud_code_base_url(
+    ctx: &QuotaCloudCodeContext,
+    override_url: Option<&str>,
+    is_google_internal: bool,
+    is_insider_or_dev: bool,
+) -> String {
+    // Preserve the host routing order: override > GCP ToS with project > internal > daily.
+    if let Some(override_url) = override_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return override_url.to_string();
     }
 
-    if ctx.is_gcp_tos {
+    if ctx.is_gcp_tos && valid_cloud_code_project_id(ctx.preferred_project_id.as_deref()).is_some()
+    {
         return CLOUD_CODE_PROD_BASE_URL.to_string();
     }
 
-    if env_bool("ANTIGRAVITY_IS_GOOGLE_INTERNAL") && env_quality_is_insider_or_dev() {
+    if is_google_internal && is_insider_or_dev {
         return CLOUD_CODE_AUTOPUSH_SANDBOX_BASE_URL.to_string();
     }
 
     CLOUD_CODE_DAILY_BASE_URL.to_string()
 }
+
+#[cfg(test)]
+#[path = "quota_cloud_code_routing_tests.rs"]
+mod cloud_code_routing_tests;
 
 fn header_value(headers: &reqwest::header::HeaderMap, name: reqwest::header::HeaderName) -> String {
     headers

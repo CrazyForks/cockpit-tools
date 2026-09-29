@@ -34,6 +34,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { useModalErrorState } from '../components/ModalErrorMessage'
 import { useEscClose } from '../hooks/useEscClose'
+import { useMfaCountdown } from '../hooks/useMfaCountdown'
 import { useEnterConfirm } from '../hooks/useEnterConfirm'
 import { AntigravityGcpTosBadge } from '../components/AntigravityGcpTosBadge'
 import { AntigravityQuotaSection } from '../components/AntigravityQuotaSection'
@@ -121,7 +122,6 @@ import { useAntigravityRuntimeTarget } from '../hooks/useAntigravityRuntimeTarge
 import { useRememberMfaQuery } from '../hooks/useRememberMfaQuery'
 import {
   getMfaOtpToken,
-  getMfaTimeRemaining,
   loadSavedMfaRecords,
   parseMfaCredentialInput,
   upsertSavedMfaRecord,
@@ -506,7 +506,6 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
   const [accountNoteFieldError, setAccountNoteFieldError] = useState<string | null>(null)
   const [savedMfaRecords, setSavedMfaRecords] = useState<MfaRecord[]>([])
   const [accountNoteMfaPickerOpen, setAccountNoteMfaPickerOpen] = useState(false)
-  const [mfaTimeRemaining, setMfaTimeRemaining] = useState(getMfaTimeRemaining)
   const [accountNoteMailPreview, setAccountNoteMailPreview] = useState<AntigravityAccountNoteMailPreviewState | null>(null)
   const [accountNoteMailPreviewLoading, setAccountNoteMailPreviewLoading] = useState(false)
   const [accountNoteMailPreviewError, setAccountNoteMailPreviewError] = useState<string | null>(null)
@@ -593,10 +592,10 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     }
   }, [t])
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setMfaTimeRemaining(getMfaTimeRemaining()), 1000)
-    return () => window.clearInterval(timer)
-  }, [])
+  const mfaTimeRemaining = useMfaCountdown(
+    Boolean(editingAccountNoteAccount || oauthAccountNoteMode) &&
+      activeAccountNoteForm.twoFactorSecret.trim().length > 0,
+  )
 
   const [displayGroups, setDisplayGroups] = useState<DisplayGroup[]>([])
   const [displayGroupsLoaded, setDisplayGroupsLoaded] = useState(false)

@@ -643,55 +643,6 @@ pub fn build_account_storage_id(email: &str) -> String {
     format!("antigravity_{:x}", md5::compute(seed.as_bytes()))
 }
 
-/// 将分组中旧账号 ID 迁移为新规范 ID
-pub fn migrate_account_id_in_groups(old_id: &str, new_id: &str) -> Result<(), String> {
-    if old_id == new_id {
-        return Ok(());
-    }
-    let data_dir = get_data_dir()?;
-    let groups_path = data_dir.join("account_groups.json");
-    if !groups_path.exists() {
-        return Ok(());
-    }
-    let content = match fs::read_to_string(&groups_path) {
-        Ok(c) => c,
-        Err(_) => return Ok(()),
-    };
-    let mut value: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
-    };
-    let Some(groups) = value.as_array_mut() else {
-        return Ok(());
-    };
-    let mut changed = false;
-    for group in groups {
-        if let Some(account_ids) = group.get_mut("accountIds").and_then(|v| v.as_array_mut()) {
-            let mut new_ids: Vec<serde_json::Value> = Vec::new();
-            let mut seen: HashSet<String> = HashSet::new();
-            for item in account_ids.drain(..) {
-                let id_str = item.as_str().unwrap_or("").to_string();
-                let actual_id = if id_str == old_id {
-                    changed = true;
-                    new_id.to_string()
-                } else {
-                    id_str
-                };
-                if !actual_id.is_empty() && seen.insert(actual_id.clone()) {
-                    new_ids.push(serde_json::Value::String(actual_id));
-                }
-            }
-            *account_ids = new_ids;
-        }
-    }
-    if changed {
-        if let Ok(new_content) = serde_json::to_string_pretty(&value) {
-            let _ = crate::modules::atomic_write::write_string_atomic(&groups_path, &new_content);
-        }
-    }
-    Ok(())
-}
-
 fn find_matching_account_id(
     index: &AccountIndex,
     email: &str,
@@ -794,90 +745,23 @@ pub fn create_pending_oauth_account(
         .find(|item| item.email.trim().eq_ignore_ascii_case(&email))
         .map(|item| item.id.clone());
 
-    let (mut account, old_id) = if let Some(id) = existing_id {
-        let old_id = id.clone();
-        let mut account = match load_account(&id) {
-            Ok(acc) => acc,
-            Err(_) => Account::new(
-                target_id.clone(),
-                email.clone(),
-                TokenData::new(
-                    String::new(),
-                    String::new(),
-                    0,
-                    Some(email.clone()),
-                    None,
-                    None,
-                ),
-            ),
-        };
+    let mut account = if let Some(id) = existing_id {
+        // Never replace an unreadable existing account with an empty placeholder.
+        let mut account = load_account(&id)?;
         account.email = email.clone();
-        (account, Some(old_id))
+        account
     } else {
         let mut account = Account::new(
-            target_id.clone(),
+            target_id,
             email.clone(),
-            TokenData::new(
-                String::new(),
-                String::new(),
-                0,
-                Some(email.clone()),
-                None,
-                None,
-            ),
+            TokenData::new(String::new(), String::new(), 0, Some(email), None, None),
         );
         account.pending_oauth = true;
-        (account, None)
+        account
     };
 
     update.apply_to(&mut account);
     account.update_last_used();
-
-    if let Some(old_id) = old_id {
-        if old_id != target_id {
-            account.id = target_id.clone();
-            save_account(&account)?;
-
-            let accounts_dir = get_accounts_dir()?;
-            let old_path = accounts_dir.join(format!("{}.json", old_id));
-            if old_path.exists() {
-                let _ = fs::remove_file(&old_path);
-            }
-
-            let mut found = false;
-            index.accounts.retain(|s| {
-                if s.id == old_id {
-                    false
-                } else if s.id == target_id {
-                    found = true;
-                    true
-                } else {
-                    true
-                }
-            });
-            if !found {
-                index.accounts.push(AccountSummary {
-                    id: target_id.clone(),
-                    email: account.email.clone(),
-                    name: account.name.clone(),
-                    created_at: account.created_at,
-                    last_used: account.last_used,
-                });
-            } else if let Some(s) = index.accounts.iter_mut().find(|s| s.id == target_id) {
-                s.email = account.email.clone();
-                s.name = account.name.clone();
-                s.last_used = account.last_used;
-            }
-
-            if index.current_account_id.as_deref() == Some(&old_id) {
-                index.current_account_id = Some(target_id.clone());
-            }
-            save_account_index(&index)?;
-
-            let _ = migrate_account_id_in_groups(&old_id, &target_id);
-            return Ok(account);
-        }
-    }
 
     save_account(&account)?;
     if let Some(item) = index.accounts.iter_mut().find(|item| item.id == account.id) {
@@ -909,9 +793,6 @@ pub fn upsert_account(
         .lock()
         .map_err(|e| format!("获取锁失败: {}", e))?;
     let mut index = load_account_index()?;
-
-    let target_id = build_account_storage_id(&email);
-
     let existing_account_id = index
         .accounts
         .iter()
@@ -927,151 +808,54 @@ pub fn upsert_account(
                 .map(|s| s.id.clone())
         });
 
-    if let Some(account_id) = existing_account_id {
-        let old_id = account_id.clone();
-        match load_account(&account_id) {
-            Ok(mut account) => {
-                let mut next_token = token;
-                if next_token.project_id.is_none() {
-                    next_token.project_id = account.token.project_id.clone();
-                }
-                if next_token.session_id.is_none() {
-                    next_token.session_id = account.token.session_id.clone();
-                }
-                account.token = next_token;
-                account.pending_oauth = false;
-                account.email = email.clone();
-                if name.is_some() {
-                    account.name = name.clone();
-                }
-                if account.disabled {
-                    account.disabled = false;
-                    account.disabled_reason = None;
-                    account.disabled_at = None;
-                } else if account.disabled_reason.as_deref() == Some("verification_required") {
-                    account.disabled_reason = None;
-                }
-                account.quota_error = None;
-                account.update_last_used();
-
-                if old_id != target_id {
-                    account.id = target_id.clone();
-                    save_account(&account)?;
-
-                    let accounts_dir = get_accounts_dir()?;
-                    let old_path = accounts_dir.join(format!("{}.json", old_id));
-                    if old_path.exists() {
-                        let _ = fs::remove_file(&old_path);
-                    }
-
-                    let mut found = false;
-                    index.accounts.retain(|s| {
-                        if s.id == old_id {
-                            false
-                        } else if s.id == target_id {
-                            found = true;
-                            true
-                        } else {
-                            true
-                        }
-                    });
-                    if !found {
-                        index.accounts.push(AccountSummary {
-                            id: target_id.clone(),
-                            email: account.email.clone(),
-                            name: account.name.clone(),
-                            created_at: account.created_at,
-                            last_used: account.last_used,
-                        });
-                    } else if let Some(s) = index.accounts.iter_mut().find(|s| s.id == target_id) {
-                        s.email = account.email.clone();
-                        if name.is_some() {
-                            s.name = name.clone();
-                        }
-                        s.last_used = account.last_used;
-                    }
-
-                    if index.current_account_id.as_deref() == Some(&old_id) {
-                        index.current_account_id = Some(target_id.clone());
-                    }
-                    save_account_index(&index)?;
-
-                    let _ = migrate_account_id_in_groups(&old_id, &target_id);
-                } else {
-                    save_account(&account)?;
-                    if let Some(idx_summary) = index.accounts.iter_mut().find(|s| s.id == target_id) {
-                        idx_summary.email = account.email.clone();
-                        if name.is_some() {
-                            idx_summary.name = name.clone();
-                        }
-                        idx_summary.last_used = account.last_used;
-                        save_account_index(&index)?;
-                    }
-                }
-
-                // 清理可能并存的同邮箱其他老 ID 文件和索引条目，彻底杜绝重复
-                let other_old_ids: Vec<String> = index
-                    .accounts
-                    .iter()
-                    .filter(|s| s.id != target_id && s.email.trim().eq_ignore_ascii_case(&email))
-                    .map(|s| s.id.clone())
-                    .collect();
-
-                for other_id in other_old_ids {
-                    let accounts_dir = get_accounts_dir()?;
-                    let other_path = accounts_dir.join(format!("{}.json", other_id));
-                    if other_path.exists() {
-                        let _ = fs::remove_file(&other_path);
-                    }
-                    index.accounts.retain(|s| s.id != other_id);
-                    let _ = migrate_account_id_in_groups(&other_id, &target_id);
-                }
-                let _ = save_account_index(&index);
-
-                return Ok(account);
-            }
-            Err(e) => {
-                modules::logger::log_warn(&format!("账号文件缺失，正在重建: {}", e));
-                let mut account = Account::new(target_id.clone(), email.clone(), token);
-                account.name = name.clone();
-                save_account(&account)?;
-
-                index.accounts.retain(|s| s.id != old_id && s.id != target_id);
-                index.accounts.push(AccountSummary {
-                    id: target_id.clone(),
-                    email: email.clone(),
-                    name: name.clone(),
-                    created_at: account.created_at,
-                    last_used: account.last_used,
-                });
-                if index.current_account_id.as_deref() == Some(&old_id) {
-                    index.current_account_id = Some(target_id.clone());
-                }
-                save_account_index(&index)?;
-                let _ = migrate_account_id_in_groups(&old_id, &target_id);
-
-                return Ok(account);
-            }
+    // Existing IDs are referenced by instances, wakeup tasks and groups. Reimport
+    // updates credentials in place; deterministic IDs apply only to new accounts.
+    let mut account = if let Some(account_id) = existing_account_id {
+        let mut account = load_account(&account_id)?;
+        let mut next_token = token;
+        if next_token.project_id.is_none() {
+            next_token.project_id = account.token.project_id.clone();
         }
+        if next_token.session_id.is_none() {
+            next_token.session_id = account.token.session_id.clone();
+        }
+        account.token = next_token;
+        account.email = email.clone();
+        if account.disabled {
+            account.disabled = false;
+            account.disabled_reason = None;
+            account.disabled_at = None;
+        } else if account.disabled_reason.as_deref() == Some("verification_required") {
+            account.disabled_reason = None;
+        }
+        account.quota_error = None;
+        account.update_last_used();
+        account
+    } else {
+        Account::new(build_account_storage_id(&email), email.clone(), token)
+    };
+    account.pending_oauth = false;
+    if name.is_some() {
+        account.name = name;
     }
-
-    let mut account = Account::new(target_id.clone(), email.clone(), token);
-    account.name = name.clone();
     save_account(&account)?;
-
-    index.accounts.retain(|s| s.id != target_id);
-    index.accounts.push(AccountSummary {
-        id: target_id.clone(),
-        email: email.clone(),
-        name: name.clone(),
-        created_at: account.created_at,
-        last_used: account.last_used,
-    });
+    if let Some(summary) = index.accounts.iter_mut().find(|item| item.id == account.id) {
+        summary.email = account.email.clone();
+        summary.name = account.name.clone();
+        summary.last_used = account.last_used;
+    } else {
+        index.accounts.push(AccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            name: account.name.clone(),
+            created_at: account.created_at,
+            last_used: account.last_used,
+        });
+    }
     if index.current_account_id.is_none() {
-        index.current_account_id = Some(target_id);
+        index.current_account_id = Some(account.id.clone());
     }
     save_account_index(&index)?;
-
     Ok(account)
 }
 
@@ -3063,3 +2847,7 @@ mod note_tests {
         let _ = fs::remove_dir_all(&data_dir);
     }
 }
+
+#[cfg(test)]
+#[path = "account_id_regression_tests.rs"]
+mod account_id_regression_tests;

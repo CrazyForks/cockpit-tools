@@ -1,3 +1,4 @@
+import { useMfaCountdown } from '../hooks/useMfaCountdown';
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { Download, Copy, Check, Eye, EyeOff, FileText, FolderOpen } from "lucide-react";
 import { useCodexAccountStore } from "../stores/useCodexAccountStore";
@@ -35,7 +36,7 @@ import { useSponsorStore } from "../stores/useSponsorStore";
 import { buildCodexExportContent, buildCodexExportFileNameBase, hasCodexExportAgentIdentity, hasCodexExportSensitiveNotes, type CodexExportFormat } from "../utils/codexExportFormats";
 import { readAccountsOverviewFilterField, readAccountsOverviewFilterPersistenceEnabled, readAccountsOverviewFilterStringArray, removeAccountsOverviewFilterField, writeAccountsOverviewFilterField } from "../utils/accountsOverviewFilterPersistence";
 import { isCodexLocalAccessRiskNoticeDismissed, setCodexLocalAccessRiskNoticeDismissed, type CodexLocalAccessRiskNoticeAction } from "../utils/codexLocalAccessRiskNotice";
-import { getMfaOtpToken, getMfaTimeRemaining, loadSavedMfaRecords, parseMfaCredentialInput, upsertSavedMfaRecord, type MfaRecord } from "../utils/mfaVault";
+import { getMfaOtpToken, loadSavedMfaRecords, parseMfaCredentialInput, upsertSavedMfaRecord, type MfaRecord } from "../utils/mfaVault";
 import { findFirstMailVerificationCode } from "../utils/mailVerificationCode";
 import { ACTIVE_GROUP_ID_FIELD, buildCodexAccountNoteForm, buildExportFileName, CODEX_BATCH_IMPORT_SESSION_STORAGE_KEY, CODEX_FILTER_PERSISTENCE_SCOPE, CODEX_HIDE_RELAY_QUOTA_LEGACY_KEY, CODEX_LOCAL_ACCESS_EXPANDED_KEY, CODEX_OVERVIEW_LAYOUT_MODE_KEY, EMPTY_CODEX_ACCOUNT_NOTE_FORM, EXPIRY_FILTER_FIELD, FILTER_TYPES_FIELD, getCodexAccountNoteTitle, getDirectoryPath, GROUP_FILTER_FIELD, hasCodexAccountNoteDetails, hasCodexAccountNoteFormDetails, isHttpLikeUrl, joinFilePath, normalizeCodexOverviewLayoutMode, normalizeHttpBaseUrl, readStoredLocalAccessAddressKind, SEARCH_QUERY_FIELD, shouldAutoHideBatchDeleteJob, type CodexAccountNoteFieldErrors, type CodexAccountNoteFormState, type CodexAccountNoteMailPreviewSnapshot, type CodexAccountNoteMailPreviewState, type CodexBatchImportFilter, type CodexCliLaunchModalState, type CodexOverviewGeneralConfig, type CodexOverviewLayoutMode } from "./codexAccountsControllerModel";
 
@@ -462,7 +463,6 @@ export function useCodexAccountsBaseController() {
     const accountNoteMailPreviewSeqRef = useRef(0);
     const accountNoteMailPreviewSnapshotRef =
       useRef<CodexAccountNoteMailPreviewSnapshot | null>(null);
-    const [mfaTimeRemaining, setMfaTimeRemaining] = useState(getMfaTimeRemaining);
     const [savingAccountNote, setSavingAccountNote] = useState(false);
     const [reauthTargetAccount, setReauthTargetAccount] =
       useState<CodexAccount | null>(null);
@@ -483,12 +483,6 @@ export function useCodexAccountsBaseController() {
       set: setAccountNoteError,
     } = useModalErrorState();
   
-    useEffect(() => {
-      const timer = window.setInterval(() => {
-        setMfaTimeRemaining(getMfaTimeRemaining());
-      }, 1000);
-      return () => window.clearInterval(timer);
-    }, []);
   
     // Use the common hook WITHOUT oauthService since Codex uses Tauri event-based OAuth
     // Codex batch-delete confirm is wired after confirmCodexDelete is defined.
@@ -2269,6 +2263,9 @@ export function useCodexAccountsBaseController() {
       activeAccountNoteMode === "pendingOAuth"
         ? pendingOAuthNoteForm
         : editingAccountNoteForm;
+    const mfaTimeRemaining = useMfaCountdown(
+      Boolean(activeAccountNoteMode) && activeAccountNoteForm.twoFactorSecret.trim().length > 0,
+    );
     const activeAccountNoteSaving =
       savingAccountNote ||
       (activeAccountNoteMode === "pendingOAuth" && savingPendingOAuthAccount);

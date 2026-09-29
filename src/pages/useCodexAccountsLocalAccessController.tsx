@@ -1,3 +1,4 @@
+import { getCodexAccountQuotaError } from "../utils/codexProxyRuntimeError";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { RefreshCw, X, CircleAlert, Info, Link2 } from "lucide-react";
@@ -199,6 +200,7 @@ export function useCodexAccountsLocalAccessController(context: Pick<ReturnType<t
   const [instanceGatewaysError, setInstanceGatewaysError] = useState("");
   const resolveQuotaErrorMeta = useCallback(
       (quotaError?: CodexQuotaErrorInfo) => {
+        quotaError = getCodexAccountQuotaError(quotaError);
         if (!quotaError?.message) {
           return {
             statusCode: "",
